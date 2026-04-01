@@ -111,6 +111,8 @@ If a widespread species is still visually dominated by one record stream, the si
 
 If BIEN is temporarily overloaded and refuses new public connections, the app now shows a clear warning that the backend is at capacity and suggests rerunning the query shortly, rather than implying the species truly has no observations.
 
+When that warning appears, you can also click **`Retry BIEN connection (with backoff)`** in the sidebar. The app will retry the BIEN occurrence query with short exponential backoff delays before giving up.
+
 ## Requirements
 
 R packages used by the app:
@@ -198,6 +200,7 @@ Rscript -e 'shiny::runApp("BIEN Shiny App")'
 - If the shell shows a continuation prompt (`>`), press `Ctrl+C` and re-paste only the command itself.
 - If `Rscript: command not found` appears, install R and try the full path version above.
 - If package installation for `sf` fails on macOS, install the Apple command line tools first and then retry.
+- If BIEN returns a temporary connection-capacity error, use **`Retry BIEN connection (with backoff)`** to automatically retry a few times before running another manual query.
 
 ## Interpreting the map correctly
 

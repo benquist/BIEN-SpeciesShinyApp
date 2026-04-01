@@ -22,7 +22,7 @@ safe_bien_call <- function(expr, timeout_sec = 90) {
   tryCatch(expr, error = function(e) e)
 }
 
-safe_bien_retry <- function(call_fn, timeout_sec = 90, attempts = 1) {
+safe_bien_retry <- function(call_fn, timeout_sec = 90, attempts = 1, sleep_sec = 1, exponential_backoff = FALSE, max_sleep_sec = 8) {
   last <- NULL
   for (i in seq_len(attempts)) {
     last <- safe_bien_call(call_fn(), timeout_sec = timeout_sec)
@@ -30,7 +30,12 @@ safe_bien_retry <- function(call_fn, timeout_sec = 90, attempts = 1) {
       return(list(result = last, attempt = i, status = "ok"))
     }
     if (inherits(last, "error") && i < attempts) {
-      Sys.sleep(1)
+      wait_sec <- if (isTRUE(exponential_backoff)) {
+        min(max_sleep_sec, sleep_sec * (2 ^ (i - 1)))
+      } else {
+        sleep_sec
+      }
+      Sys.sleep(wait_sec)
     }
   }
   list(
@@ -83,7 +88,7 @@ query_occurrence_randomized <- function(species_name, cultivated = FALSE, native
   )
 }
 
-query_occurrence_with_fallback <- function(species_name, input, occ_limit, occ_page_size, timeout_sec) {
+query_occurrence_with_fallback <- function(species_name, input, occ_limit, occ_page_size, timeout_sec, connection_retry = FALSE) {
   use_cultivated_filter <- if (is.null(input$use_cultivated_filter)) TRUE else isTRUE(input$use_cultivated_filter)
   use_introduced_filter <- if (is.null(input$use_introduced_filter)) TRUE else isTRUE(input$use_introduced_filter)
   include_cultivated <- if (use_cultivated_filter) isTRUE(input$include_cultivated) else TRUE
@@ -107,6 +112,7 @@ query_occurrence_with_fallback <- function(species_name, input, occ_limit, occ_p
 
   notes <- character()
   last_result <- NULL
+  attempts_n <- if (isTRUE(connection_retry)) 3 else 1
 
   for (plan in plans) {
     res <- safe_bien_retry(
@@ -121,7 +127,10 @@ query_occurrence_with_fallback <- function(species_name, input, occ_limit, occ_p
         )
       },
       timeout_sec = min(timeout_sec, 25),
-      attempts = 1
+      attempts = attempts_n,
+      sleep_sec = 1,
+      exponential_backoff = isTRUE(connection_retry),
+      max_sleep_sec = 8
     )
 
     last_result <- res$result
@@ -801,10 +810,11 @@ ui <- fluidPage(
     sidebarPanel(
       textInput("species", "Species name", value = "Eschscholzia californica", placeholder = "Genus species"),
       actionButton("run_query", "Query BIEN", class = "btn-primary"),
+      actionButton("retry_bien", "Retry BIEN connection (with backoff)", class = "btn-warning btn-sm"),
       tags$script(HTML("$(document).on('keydown', '#species', function(e) { if (e.key === 'Enter') { $('#run_query').click(); return false; } });")),
       tags$div(
         style = "font-size:0.92em;color:#555;margin:6px 0 10px 0;",
-        "Occurrence records load first for speed. Optional BIEN total counts can be loaded manually from the Summary Statistics tab, while traits and range layers are fetched only when those tabs are opened."
+        "Occurrence records load first for speed. Optional BIEN total counts can be loaded manually from the Summary Statistics tab, while traits and range layers are fetched only when those tabs are opened. If BIEN is temporarily at capacity, you can click 'Retry BIEN connection (with backoff)' to retry automatically."
       ),
       tags$hr(),
       tags$div(
@@ -907,10 +917,19 @@ server <- function(input, output, session) {
     get(cache_key, envir = cache_env, inherits = FALSE)
   }
 
-  bien_results <- eventReactive(input$run_query, {
+  query_trigger <- reactiveVal("run")
+  observeEvent(input$run_query, {
+    query_trigger("run")
+  }, ignoreInit = TRUE)
+  observeEvent(input$retry_bien, {
+    query_trigger("retry")
+  }, ignoreInit = TRUE)
+
+  bien_results <- eventReactive(list(input$run_query, input$retry_bien), {
     req(nchar(str_trim(input$species)) > 0)
 
     species_name <- str_squish(input$species)
+    retry_mode <- identical(query_trigger(), "retry")
     include_range_query <- if (is.null(input$include_range_query)) FALSE else isTRUE(input$include_range_query)
     timeout_sec <- max(15, as.numeric(input$query_timeout))
     occ_limit <- max(200, as.numeric(input$occurrence_limit))
@@ -951,8 +970,12 @@ server <- function(input, output, session) {
     query_started <- Sys.time()
 
     withProgress(message = paste("Querying BIEN for", species_name), detail = "Connecting to BIEN...", value = 0, {
-      incProgress(0.15, detail = "Occurrences: retrieving records from BIEN (large or widespread species can take longer)")
-      occ_bundle <- query_occurrence_with_fallback(species_name, input, occ_fetch_limit, occ_page_size, timeout_sec)
+      if (retry_mode) {
+        incProgress(0.1, detail = "Retry mode: re-attempting BIEN connection with backoff")
+      } else {
+        incProgress(0.15, detail = "Occurrences: retrieving records from BIEN (large or widespread species can take longer)")
+      }
+      occ_bundle <- query_occurrence_with_fallback(species_name, input, occ_fetch_limit, occ_page_size, timeout_sec, connection_retry = retry_mode)
       occ <- occ_bundle$data
       occ_strategy <- occ_bundle$strategy
       occ_limit_used <- occ_bundle$limit_used
@@ -972,7 +995,7 @@ server <- function(input, output, session) {
       occ_prepared <- if (is.data.frame(occ)) prepare_occurrences(occ, map_point_cap = 800, sample_method = display_sampling_method) else list(data = NULL, lat_col = NULL, lon_col = NULL, qa = list(total = 0, coord_valid = 0, kept = 0, removed = 0, removed_invalid = 0, duplicates_removed = 0), map_cap_applied = FALSE, map_cap = 800, original_kept = 0, sample_method = display_sampling_method)
       family_name <- extract_primary_value(occ, c("scrubbed_family", "family", "verbatim_family"))
 
-      query_errors <- c(occ_bundle$notes, occ_error)
+      query_errors <- c(if (retry_mode) "retry_mode=connection_backoff" else NULL, occ_bundle$notes, occ_error)
       query_errors <- query_errors[!is.na(query_errors)]
       reconciliation_tbl <- build_reconciliation_table(species_name, occ, NULL, query_errors, NULL)
 

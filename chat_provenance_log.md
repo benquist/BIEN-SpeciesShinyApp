@@ -59,5 +59,10 @@ Prompt: Clarify whether the BIEN app changes were being pushed to the wrong repo
 Source session: current workspace session
 Outcome: Verified that the BIEN app folder was still nested under the `biodiversity-agents-lab` monorepo, then synced the current app files into the dedicated `BIEN-SpeciesShinyApp` repository so future BIEN app work can be maintained separately.
 
+12. Date: 2026-04-01
+Prompt: Confirm whether BIEN is truly down versus an app issue, then add a retry mechanism when connection-capacity errors occur.
+Source session: current workspace session
+Outcome: Confirmed the BIEN public database connection-slot error with direct BIEN package calls outside the app UI, then added a `Retry BIEN connection (with backoff)` button and exponential-backoff retries in the occurrence query path, plus README guidance for using this retry workflow.
+
 ## Update Rule
 Append a new entry whenever prompts lead to created/modified app code, BIEN query logic, or documentation under BIEN Shiny App/.
