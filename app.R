@@ -861,8 +861,8 @@ ui <- fluidPage(
         margin: 6px 0 14px 0;
         padding: 12px 14px;
         border-radius: 10px;
-        border: 1px solid #c7dff3;
-        background: linear-gradient(110deg, rgba(47,121,183,0.1), rgba(116,182,74,0.1));
+        border: 1px solid #a8cbe9;
+        background: linear-gradient(110deg, rgba(47,121,183,0.2), rgba(116,182,74,0.24));
       }
       .bien-title {
         margin: 0;
@@ -922,34 +922,35 @@ ui <- fluidPage(
       .nav-tabs > li.active > a:hover {
         color: var(--bien-blue-deep);
         border-top: 3px solid var(--bien-green);
+        background: linear-gradient(180deg, #ecf6ff 0%, #f4fbef 100%);
         font-weight: 600;
       }
       .bien-overview-card {
-        background: #f8f9fa;
-        border: 1px solid #dee2e6;
+        background: linear-gradient(180deg, #f0f7ff 0%, #f5fbef 100%);
+        border: 1px solid #b7d2e8;
         border-radius: 8px;
         padding: 16px 20px;
         margin-bottom: 18px;
       }
       .bien-feature-icon { font-size: 1.6em; margin-right: 8px; }
       .bien-link-card {
-        background: #e8f4f8;
-        border: 1px solid #b8daed;
+        background: linear-gradient(180deg, #deefff 0%, #eaf7df 100%);
+        border: 1px solid #9fc9e8;
         border-radius: 8px;
         padding: 14px 18px;
         margin-bottom: 12px;
       }
       .bien-pub-card {
-        background: #f0f7ee;
-        border: 1px solid #acd5a2;
+        background: linear-gradient(180deg, #e7f4ff 0%, #eaf8df 100%);
+        border: 1px solid #9fcca7;
         border-radius: 8px;
         padding: 14px 18px;
         margin-bottom: 12px;
         font-size: 0.97em;
       }
       .ponderosa-section {
-        background: #fff;
-        border: 1px solid #c8e6c9;
+        background: linear-gradient(180deg, #ffffff 0%, #f2f9ff 100%);
+        border: 1px solid #a5d4a6;
         border-radius: 8px;
         padding: 18px 22px;
         margin-bottom: 18px;
@@ -1200,6 +1201,15 @@ ui <- fluidPage(
                      href = "https://bien.nceas.ucsb.edu/bien/biendata/previous-bien-versions/bien-4/", target = "_blank"),
               tags$p(style = "margin:4px 0 0 0;font-size:0.93em;color:#444;",
                 "Overview of the BIEN research group at NCEAS, the BIEN 4 data release, methods, and contributing teams.")
+            ),
+            tags$div(
+              class = "bien-link-card",
+              tags$strong("\U0001F4F0 Methods Blog Feature"),
+              tags$br(),
+              tags$a("https://methodsblog.com/2026/03/30/building-the-infrastructure-for-reproducible-biodiversity-science/",
+                     href = "https://methodsblog.com/2026/03/30/building-the-infrastructure-for-reproducible-biodiversity-science/", target = "_blank"),
+              tags$p(style = "margin:4px 0 0 0;font-size:0.93em;color:#444;",
+                "Methods in Ecology and Evolution blog post on building infrastructure for reproducible biodiversity science.")
             ),
             tags$div(
               class = "bien-pub-card",
