@@ -1259,7 +1259,16 @@ ui <- fluidPage(
           DTOutput("trait_visual_table")
         ),
         tabPanel("Range", br(), verbatimTextOutput("range_text"), leafletOutput("range_map", height = 500), br(), DTOutput("range_table")),
-        tabPanel("Reconciliation", br(), DTOutput("reconciliation_table"), br(), verbatimTextOutput("error_log"))
+        tabPanel("Reconciliation", br(), DTOutput("reconciliation_table"), br(), verbatimTextOutput("error_log")),
+        tabPanel(
+          "BIEN Query Code",
+          br(),
+          tags$p(
+            style = "color:#555;max-width:900px;",
+            "This script shows a direct BIEN-package query for occurrence records and trait records for the current species with no biological filters applied."
+          ),
+          verbatimTextOutput("bien_query_code")
+        )
       ),
       width = 9
     )
@@ -1406,6 +1415,55 @@ server <- function(input, output, session) {
   observeEvent(bien_results(), {
     updateTabsetPanel(session, "main_tabs", selected = "Occurrence Map")
   }, ignoreInit = TRUE)
+
+  output$bien_query_code <- renderText({
+    species_for_code <- str_squish(input$species)
+    if (!nzchar(species_for_code)) {
+      species_for_code <- "Pinus ponderosa"
+    }
+    species_for_code <- normalize_species_name(species_for_code)
+
+    paste(
+      "# BIEN package query example: occurrences + associated trait table",
+      "# No biological filters applied (introduced/native, cultivated, geovalid are all unconstrained).",
+      "",
+      "library(BIEN)",
+      "library(dplyr)",
+      "",
+      paste0("species_name <- \\"", species_for_code, "\\""),
+      "",
+      "# 1) Occurrence records used for mapping (no filters applied)",
+      "occ_all <- BIEN_occurrence_species(",
+      "  species = species_name,",
+      "  cultivated = TRUE,",
+      "  natives.only = FALSE,",
+      "  only.geovalid = FALSE,",
+      "  all.taxonomy = TRUE,",
+      "  native.status = TRUE,",
+      "  observation.type = TRUE,",
+      "  political.boundaries = FALSE,",
+      "  collection.info = FALSE",
+      ")",
+      "",
+      "# 2) Trait records for the same species",
+      "traits_all <- BIEN_trait_species(",
+      "  species = species_name,",
+      "  all.taxonomy = TRUE,",
+      "  source.citation = TRUE",
+      ")",
+      "",
+      "# 3) Optional join at species level (many-to-many; keep original tables for analysis)",
+      "occ_with_traits <- occ_all %>%",
+      "  left_join(traits_all, by = \"scrubbed_species_binomial\")",
+      "",
+      "# Inspect outputs",
+      "nrow(occ_all)",
+      "nrow(traits_all)",
+      "head(occ_all)",
+      "head(traits_all)",
+      sep = "\n"
+    )
+  })
 
   # Lazy-load BIEN trait data only when the user opens one of the trait-focused tabs.
   trait_results <- reactive({
