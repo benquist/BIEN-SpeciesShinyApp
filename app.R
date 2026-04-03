@@ -62,7 +62,7 @@ normalize_species_name <- function(x) {
   }
   if (length(parts) >= 3) {
     # Keep infraspecific epithets normalized while leaving author strings as entered.
-    epithet_idx <- which(str_detect(parts, "^(subsp\\.|var\\.|f\\.)$")) + 1
+    epithet_idx <- which(str_detect(str_to_lower(parts), "^(subsp\\.?|var\\.?|f\\.?)$")) + 1
     epithet_idx <- epithet_idx[epithet_idx <= length(parts)]
     if (length(epithet_idx) > 0) {
       parts[epithet_idx] <- str_to_lower(parts[epithet_idx])
@@ -70,6 +70,12 @@ normalize_species_name <- function(x) {
   }
 
   paste(parts, collapse = " ")
+}
+
+sql_quote_literal <- function(x) {
+  x <- as.character(x)
+  x <- gsub("'", "''", x, fixed = TRUE)
+  paste0("'", x, "'")
 }
 
 # Query BIEN occurrences with the same biological filters used by the BIEN helper,
@@ -96,7 +102,7 @@ query_occurrence_randomized <- function(species_name, cultivated = FALSE, native
     collection_$select, cultivated_$select, newworld_$select,
     observation_$select, geovalid_$select,
     "FROM view_full_occurrence_individual",
-    "WHERE scrubbed_species_binomial in (", paste(shQuote(species_name, type = "sh"), collapse = ", "), ")",
+    "WHERE scrubbed_species_binomial in (", paste(sql_quote_literal(species_name), collapse = ", "), ")",
     cultivated_$query, newworld_$query, natives_$query,
     observation_$query, geovalid_$query,
     "AND higher_plant_group NOT IN ('Algae','Bacteria','Fungi')",
@@ -335,7 +341,7 @@ count_occurrence_records <- function(species_name, cultivated = FALSE, natives_o
     count_query <- paste(
       "SELECT COUNT(*) AS bien_total_records",
       "FROM view_full_occurrence_individual",
-      "WHERE scrubbed_species_binomial in (", paste(shQuote(species_name, type = "sh"), collapse = ", "), ")",
+      "WHERE scrubbed_species_binomial in (", paste(sql_quote_literal(species_name), collapse = ", "), ")",
       cultivated_$query, newworld_$query, natives_$query, observation_$query, geovalid_$query,
       "AND higher_plant_group NOT IN ('Algae','Bacteria','Fungi')",
       "AND (georef_protocol is NULL OR georef_protocol<>'county centroid')",
@@ -381,7 +387,7 @@ count_occurrence_source_mix <- function(species_name, cultivated = FALSE, native
       paste0("WHEN ", combined_sql, " LIKE '%specimen%' OR ", combined_sql, " LIKE '%herb%' OR ", combined_sql, " LIKE '%preserved specimen%' OR ", combined_sql, " LIKE '%preservedspecimen%' OR ", combined_sql, " LIKE '%museum%' THEN 'Specimens'"),
       "ELSE 'Other' END AS source_group, COUNT(*) AS n_records",
       "FROM view_full_occurrence_individual",
-      "WHERE scrubbed_species_binomial in (", paste(shQuote(species_name, type = "sh"), collapse = ", "), ")",
+      "WHERE scrubbed_species_binomial in (", paste(sql_quote_literal(species_name), collapse = ", "), ")",
       cultivated_$query, newworld_$query, natives_$query, observation_$query, geovalid_$query,
       "AND higher_plant_group NOT IN ('Algae','Bacteria','Fungi')",
       "AND (georef_protocol is NULL OR georef_protocol<>'county centroid')",
@@ -714,6 +720,7 @@ prepare_occurrences <- function(occ, map_point_cap = 800, sample_method = "rando
 }
 
 make_popup_text <- function(df) {
+  esc <- htmltools::htmlEscape
   species_col <- find_first_col(df, c("scrubbed_species_binomial", "species", "scientific_name", "taxon"))
   country_col <- find_first_col(df, c("country", "country_name"))
   state_col <- find_first_col(df, c("state_province", "state"))
@@ -722,12 +729,13 @@ make_popup_text <- function(df) {
   intro_col <- find_first_col(df, c("is_introduced"))
   category_txt <- if ("observation_category" %in% names(df)) as.character(df$observation_category) else NA_character_
 
-  species_txt <- if (!is.null(species_col)) df[[species_col]] else "record"
-  country_txt <- if (!is.null(country_col)) df[[country_col]] else NA_character_
-  state_txt <- if (!is.null(state_col)) df[[state_col]] else NA_character_
-  source_txt <- if (!is.null(source_col)) df[[source_col]] else NA_character_
-  obs_type_txt <- if (!is.null(obs_type_col)) df[[obs_type_col]] else NA_character_
-  intro_txt <- if (!is.null(intro_col)) as.character(df[[intro_col]]) else NA_character_
+  species_txt <- if (!is.null(species_col)) esc(as.character(df[[species_col]])) else "record"
+  country_txt <- if (!is.null(country_col)) esc(as.character(df[[country_col]])) else NA_character_
+  state_txt <- if (!is.null(state_col)) esc(as.character(df[[state_col]])) else NA_character_
+  source_txt <- if (!is.null(source_col)) esc(as.character(df[[source_col]])) else NA_character_
+  obs_type_txt <- if (!is.null(obs_type_col)) esc(as.character(df[[obs_type_col]])) else NA_character_
+  intro_txt <- if (!is.null(intro_col)) esc(as.character(df[[intro_col]])) else NA_character_
+  category_txt <- esc(as.character(category_txt))
 
   paste0(
     "<strong>", species_txt, "</strong>",
@@ -1179,9 +1187,6 @@ server <- function(input, output, session) {
 
     species_input <- str_squish(input$species)
     species_name <- normalize_species_name(species_input)
-    if (!identical(species_name, species_input)) {
-      updateTextInput(session, "species", value = species_name)
-    }
     retry_mode <- identical(query_trigger(), "retry")
     include_range_query <- if (is.null(input$include_range_query)) FALSE else isTRUE(input$include_range_query)
     timeout_sec <- max(15, as.numeric(input$query_timeout))
@@ -1191,7 +1196,6 @@ server <- function(input, output, session) {
     map_sampling_method <- if (is.null(input$map_sampling_method)) "datasource" else input$map_sampling_method
     display_sampling_method <- if (sample_random) map_sampling_method else "head"
     occ_page_size <- min(1000, max(occ_limit, 500))
-    trait_page_size <- min(500, trait_limit)
     occ_fetch_limit <- min(if (identical(display_sampling_method, "head")) occ_limit else max(occ_limit * 2, 1000), 2000)
     trait_fetch_limit <- min(trait_limit, 1000)
     range_dir <- file.path(tempdir(), "bien_ranges_cache", gsub("\\s+", "_", species_name))
@@ -1618,6 +1622,16 @@ server <- function(input, output, session) {
     mappable_n <- if (is.data.frame(res$occurrences_prepared$data)) nrow(res$occurrences_prepared$data) else 0
     cached_range <- get_cached_result(range_cache, res$query_cache_key)
     has_range <- !is.null(cached_range) && inherits(cached_range$range_sf, "sf") && nrow(cached_range$range_sf) > 0
+
+    if (!identical(res$occ_strategy, "strict")) {
+      return(tags$div(
+        style = "background:#fff3cd;border:1px solid #ffe69c;color:#664d03;padding:10px 12px;border-radius:6px;margin:8px 0;",
+        tags$strong("Filter relaxation note: "),
+        "The current result used a fallback BIEN strategy (",
+        tags$code(res$occ_strategy),
+        ") to recover records. Interpret native/geovalid conclusions cautiously."
+      ))
+    }
 
     if (is_bien_connection_error(res$query_errors)) {
       return(tags$div(

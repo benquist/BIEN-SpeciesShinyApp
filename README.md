@@ -199,7 +199,7 @@ shiny::runApp(".")
 If the app is being run from the broader `biodiversity-agents-lab` workspace rather than the dedicated app repo, use:
 
 ```bash
-Rscript -e 'shiny::runApp("BIEN Shiny App")'
+Rscript -e 'shiny::runApp("BIEN-SpeciesShinyApp")'
 ```
 
 ### Troubleshooting
