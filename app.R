@@ -805,6 +805,41 @@ build_reconciliation_table <- function(species_name, occ, traits, query_errors, 
 
 # Main Shiny user interface: query controls plus linked tabs for occurrence, trait, and range evidence.
 ui <- fluidPage(
+  tags$head(
+    tags$style(HTML("
+      .bien-overview-card {
+        background: #f8f9fa;
+        border: 1px solid #dee2e6;
+        border-radius: 8px;
+        padding: 16px 20px;
+        margin-bottom: 18px;
+      }
+      .bien-feature-icon { font-size: 1.6em; margin-right: 8px; }
+      .bien-link-card {
+        background: #e8f4f8;
+        border: 1px solid #b8daed;
+        border-radius: 8px;
+        padding: 14px 18px;
+        margin-bottom: 12px;
+      }
+      .bien-pub-card {
+        background: #f0f7ee;
+        border: 1px solid #acd5a2;
+        border-radius: 8px;
+        padding: 14px 18px;
+        margin-bottom: 12px;
+        font-size: 0.97em;
+      }
+      .ponderosa-section {
+        background: #fff;
+        border: 1px solid #c8e6c9;
+        border-radius: 8px;
+        padding: 18px 22px;
+        margin-bottom: 18px;
+      }
+      .source-bar { height: 22px; border-radius: 4px; margin-bottom: 5px; display: inline-block; }
+    "))
+  ),
   titlePanel("BIEN Shiny App: Species-Level Observation Explorer"),
   sidebarLayout(
     sidebarPanel(
@@ -861,6 +896,193 @@ ui <- fluidPage(
     mainPanel(
       tabsetPanel(
         id = "main_tabs",
+
+        # ── Overview & About tab ──────────────────────────────────────────────
+        tabPanel(
+          "Overview & About",
+          br(),
+
+          # Hero intro
+          tags$div(
+            class = "bien-overview-card",
+            tags$h3(style = "margin-top:0;color:#2c7a34;", "What can you learn from this app?"),
+            tags$p(style = "max-width:900px;font-size:1.05em;",
+              "This app lets you explore species-level biodiversity evidence from the ",
+              tags$a("BIEN database", href = "https://biendata.org/", target = "_blank"),
+              " — occurrence records, trait measurements, and mapped ranges — in one place,",
+              " without writing any code. Type any plant species name and the app immediately surfaces",
+              " where it has been observed, what traits BIEN has measured, and how confident that evidence is."
+            ),
+            tags$p(style = "max-width:900px;color:#555;",
+              tags$strong("Live app: "),
+              tags$a("https://benquist.shinyapps.io/bien-species-shinyapp/",
+                     href = "https://benquist.shinyapps.io/bien-species-shinyapp/", target = "_blank")
+            )
+          ),
+
+          # Pinus ponderosa worked example
+          tags$div(
+            class = "ponderosa-section",
+            tags$h4(style = "color:#2c5f2e;margin-top:0;",
+              tags$em("Pinus ponderosa"), " (Ponderosa Pine) — a worked example"
+            ),
+            tags$p(style = "color:#555;max-width:900px;",
+              "Ponderosa Pine is one of the most widespread and ecologically important conifers in western North America,",
+              " making it an excellent demonstration species for the app. Here is what a typical query returns:"
+            ),
+            fluidRow(
+              column(4,
+                tags$div(
+                  class = "bien-overview-card", style = "height:190px;",
+                  tags$span(class = "bien-feature-icon", "\U0001F5FA\uFE0F"),
+                  tags$strong("Occurrence Map"),
+                  tags$p(style = "font-size:0.93em;color:#444;margin-top:6px;",
+                    "Thousands of geo-validated occurrence records spanning California, Oregon, Idaho, Colorado, and northern Mexico.",
+                    " Records are colored by source class (plot surveys, herbarium specimens, iNaturalist citizen-science observations).",
+                    " The app balances the display so no single data source visually drowns out the others."
+                  )
+                )
+              ),
+              column(4,
+                tags$div(
+                  class = "bien-overview-card", style = "height:190px;",
+                  tags$span(class = "bien-feature-icon", "\U0001F4CA"),
+                  tags$strong("Trait Distributions"),
+                  tags$p(style = "font-size:0.93em;color:#444;margin-top:6px;",
+                    "BIEN returns continuous traits including stem wood density (g/cm\U00B3),",
+                    " leaf nitrogen content (mg/g), and seed mass (mg).",
+                    " The Trait Graphics tab draws histograms per trait-unit combination so you can see the full measured range,",
+                    " typical values, and outliers at a glance."
+                  )
+                )
+              ),
+              column(4,
+                tags$div(
+                  class = "bien-overview-card", style = "height:190px;",
+                  tags$span(class = "bien-feature-icon", "\U0001F4CB"),
+                  tags$strong("Observation Sources"),
+                  tags$p(style = "font-size:0.93em;color:#444;margin-top:6px;",
+                    "The Observation Sources tab breaks down how many records come from each datasource.",
+                    " For Ponderosa Pine, FIA forest inventory plots typically provide the largest share,",
+                    " followed by herbarium collections and citizen-science platforms such as iNaturalist."
+                  )
+                )
+              )
+            ),
+
+            # Simulated source-mix bar chart (static illustration)
+            tags$h5(style = "margin-top:8px;color:#444;", "Example record-source composition (illustrative)"),
+            tags$div(
+              style = "max-width:580px;",
+              tags$div(style = "margin-bottom:4px;font-size:0.9em;",
+                tags$span(class = "source-bar", style = "width:210px;background:#4caf50;"),
+                tags$span(style = "margin-left:8px;", "FIA / Forest inventory plots  ~42 %")
+              ),
+              tags$div(style = "margin-bottom:4px;font-size:0.9em;",
+                tags$span(class = "source-bar", style = "width:140px;background:#2196f3;"),
+                tags$span(style = "margin-left:8px;", "Herbarium specimens  ~28 %")
+              ),
+              tags$div(style = "margin-bottom:4px;font-size:0.9em;",
+                tags$span(class = "source-bar", style = "width:95px;background:#ff9800;"),
+                tags$span(style = "margin-left:8px;", "iNaturalist / citizen-science  ~19 %")
+              ),
+              tags$div(style = "margin-bottom:4px;font-size:0.9em;",
+                tags$span(class = "source-bar", style = "width:50px;background:#9c27b0;"),
+                tags$span(style = "margin-left:8px;", "Literature / checklists  ~11 %")
+              ),
+              tags$p(style = "font-size:0.8em;color:#888;margin-top:4px;",
+                "Proportions are illustrative. Actual values depend on your filter settings and BIEN query date."
+              )
+            ),
+
+            tags$hr(style = "margin:12px 0;"),
+            tags$p(style = "font-size:0.93em;color:#555;max-width:900px;",
+              tags$strong("Try it: "),
+              "Type ", tags$code("Pinus ponderosa"), " in the Species name box on the left,",
+              " leave filters at their defaults (native, non-cultivated, geovalid),",
+              " and click ", tags$strong("Query BIEN"), ".",
+              " Then explore the Occurrence Map, Trait Graphics, and Observation Sources tabs."
+            )
+          ),
+
+          # App features summary
+          tags$div(
+            class = "bien-overview-card",
+            tags$h4(style = "margin-top:0;", "What the app gives you"),
+            tags$table(
+              style = "width:100%;border-collapse:collapse;font-size:0.97em;",
+              tags$thead(
+                tags$tr(
+                  tags$th(style = "text-align:left;padding:6px 10px;background:#e9ecef;border-radius:4px;", "Tab"),
+                  tags$th(style = "text-align:left;padding:6px 10px;background:#e9ecef;", "What you learn")
+                )
+              ),
+              tags$tbody(
+                tags$tr(tags$td(style = "padding:5px 10px;border-bottom:1px solid #eee;", tags$strong("Occurrence Map")),
+                         tags$td(style = "padding:5px 10px;border-bottom:1px solid #eee;", "Where the species has been observed; which record types dominate; whether the map shows all points or a balanced sample")),
+                tags$tr(tags$td(style = "padding:5px 10px;border-bottom:1px solid #eee;", tags$strong("Summary Statistics")),
+                         tags$td(style = "padding:5px 10px;border-bottom:1px solid #eee;", "Total record counts, QA losses, active filter mode, and optional BIEN-wide totals")),
+                tags$tr(tags$td(style = "padding:5px 10px;border-bottom:1px solid #eee;", tags$strong("Observation Table")),
+                         tags$td(style = "padding:5px 10px;border-bottom:1px solid #eee;", "Searchable raw occurrence records with provenance and coordinate columns")),
+                tags$tr(tags$td(style = "padding:5px 10px;border-bottom:1px solid #eee;", tags$strong("Observation Sources")),
+                         tags$td(style = "padding:5px 10px;border-bottom:1px solid #eee;", "Record counts by datasource so you can see the evidence mix at a glance")),
+                tags$tr(tags$td(style = "padding:5px 10px;border-bottom:1px solid #eee;", tags$strong("Traits / Trait Summary")),
+                         tags$td(style = "padding:5px 10px;border-bottom:1px solid #eee;", "Raw trait measurements and a compact summary table by trait name and unit")),
+                tags$tr(tags$td(style = "padding:5px 10px;border-bottom:1px solid #eee;", tags$strong("Trait Graphics")),
+                         tags$td(style = "padding:5px 10px;border-bottom:1px solid #eee;", "Histograms of continuous traits per unit — quickly shows typical values, range, and outliers")),
+                tags$tr(tags$td(style = "padding:5px 10px;border-bottom:1px solid #eee;", tags$strong("Range")),
+                         tags$td(style = "padding:5px 10px;border-bottom:1px solid #eee;", "BIEN mapped range polygon when available, useful when occurrence coordinates are sparse")),
+                tags$tr(tags$td(style = "padding:5px 10px;", tags$strong("Reconciliation")),
+                         tags$td(style = "padding:5px 10px;", "Taxonomic matching details and query error log for auditing and debugging"))
+              )
+            )
+          ),
+
+          # Learn more / links
+          tags$div(
+            class = "bien-overview-card",
+            tags$h4(style = "margin-top:0;", "Learn more about BIEN"),
+            tags$div(
+              class = "bien-link-card",
+              tags$strong("\U0001F30E BIEN Data Portal"),
+              tags$br(),
+              tags$a("https://biendata.org/", href = "https://biendata.org/", target = "_blank"),
+              tags$p(style = "margin:4px 0 0 0;font-size:0.93em;color:#444;",
+                "The main BIEN data portal — browse species, traits, and range data, and access the full BIEN occurrence database for the Americas.")
+            ),
+            tags$div(
+              class = "bien-link-card",
+              tags$strong("\U0001F4BB App source code (GitHub)"),
+              tags$br(),
+              tags$a("https://github.com/benquist/BIEN-SpeciesShinyApp",
+                     href = "https://github.com/benquist/BIEN-SpeciesShinyApp", target = "_blank"),
+              tags$p(style = "margin:4px 0 0 0;font-size:0.93em;color:#444;",
+                "Full source code for this Shiny app, including workflow documentation, QA steps, and interpretation caveats.")
+            ),
+            tags$div(
+              class = "bien-link-card",
+              tags$strong("\U0001F52C BIEN Project — NCEAS"),
+              tags$br(),
+              tags$a("https://bien.nceas.ucsb.edu/bien/biendata/previous-bien-versions/bien-4/",
+                     href = "https://bien.nceas.ucsb.edu/bien/biendata/previous-bien-versions/bien-4/", target = "_blank"),
+              tags$p(style = "margin:4px 0 0 0;font-size:0.93em;color:#444;",
+                "Overview of the BIEN research group at NCEAS, the BIEN 4 data release, methods, and contributing teams.")
+            ),
+            tags$div(
+              class = "bien-pub-card",
+              tags$strong("\U0001F4D6 Latest BIEN publication"),
+              tags$br(),
+              tags$em("Enquist et al. (2024). BIEN: Botanical Information and Ecology Network. Methods in Ecology and Evolution."),
+              tags$br(),
+              tags$a("https://besjournals.onlinelibrary.wiley.com/doi/abs/10.1111/2041-210x.70274",
+                     href = "https://besjournals.onlinelibrary.wiley.com/doi/abs/10.1111/2041-210x.70274", target = "_blank"),
+              tags$p(style = "margin:4px 0 0 0;font-size:0.93em;color:#444;",
+                "Peer-reviewed methods paper describing the BIEN database, data standards, and workflow. Cite this when using BIEN data in publications.")
+            )
+          )
+        ),
+        # ─────────────────────────────────────────────────────────────────────
+
         tabPanel(
           "Occurrence Map",
           br(),

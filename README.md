@@ -2,6 +2,13 @@
 
 Interactive Shiny app for species-level biodiversity exploration using the BIEN R package, with linked views for occurrences, traits, and species range artifacts.
 
+## Try it live
+
+> **You can use the app right now without installing anything:**
+> **[https://benquist.shinyapps.io/bien-species-shinyapp/](https://benquist.shinyapps.io/bien-species-shinyapp/)**
+
+To run it locally instead, see the [Install and run from GitHub](#install-and-run-from-github) section below.
+
 ## Overview
 
 `BIEN-SpeciesShinyApp` is designed for fast, transparent inspection of species-level evidence before downstream ecological analysis, niche modeling, conservation screening, or data triage.
