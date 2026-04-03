@@ -842,6 +842,88 @@ build_reconciliation_table <- function(species_name, occ, traits, query_errors, 
 ui <- fluidPage(
   tags$head(
     tags$style(HTML("
+      :root {
+        --bien-blue: #2f79b7;
+        --bien-blue-deep: #1e5f98;
+        --bien-green: #74b64a;
+        --bien-green-deep: #4f8f2a;
+        --bien-sky: #e9f4ff;
+        --bien-mint: #eef9e8;
+      }
+      body {
+        background: linear-gradient(180deg, #f7fbff 0%, #fbfef9 100%);
+      }
+      .bien-app-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 14px;
+        margin: 6px 0 14px 0;
+        padding: 12px 14px;
+        border-radius: 10px;
+        border: 1px solid #c7dff3;
+        background: linear-gradient(110deg, rgba(47,121,183,0.1), rgba(116,182,74,0.1));
+      }
+      .bien-title {
+        margin: 0;
+        color: var(--bien-blue-deep);
+        font-weight: 700;
+      }
+      .bien-subtitle {
+        margin: 3px 0 0 0;
+        color: #426988;
+        font-size: 0.95em;
+      }
+      .bien-logo-wrap {
+        width: 140px;
+        height: 52px;
+        border-radius: 8px;
+        border: 1px solid #b9d5ea;
+        background: #ffffff;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        overflow: hidden;
+        flex-shrink: 0;
+      }
+      .bien-logo {
+        max-width: 100%;
+        max-height: 100%;
+        object-fit: contain;
+      }
+      .bien-logo-fallback {
+        width: 100%;
+        height: 100%;
+        display: none;
+        align-items: center;
+        justify-content: center;
+        font-weight: 700;
+        color: var(--bien-blue-deep);
+        background: linear-gradient(90deg, #def0ff, #edf8e4);
+      }
+      .well {
+        border: 1px solid #cfe2c2;
+        background: linear-gradient(180deg, #f5fbf3 0%, #f7fcff 100%);
+      }
+      .btn-primary {
+        background: linear-gradient(90deg, var(--bien-blue), var(--bien-green));
+        border-color: var(--bien-blue-deep);
+      }
+      .btn-warning {
+        background: #f4f8ef;
+        border-color: var(--bien-green-deep);
+        color: #3a6520;
+      }
+      .nav-tabs > li > a {
+        color: #2f5f86;
+      }
+      .nav-tabs > li.active > a,
+      .nav-tabs > li.active > a:focus,
+      .nav-tabs > li.active > a:hover {
+        color: var(--bien-blue-deep);
+        border-top: 3px solid var(--bien-green);
+        font-weight: 600;
+      }
       .bien-overview-card {
         background: #f8f9fa;
         border: 1px solid #dee2e6;
@@ -875,7 +957,23 @@ ui <- fluidPage(
       .source-bar { height: 22px; border-radius: 4px; margin-bottom: 5px; display: inline-block; }
     "))
   ),
-  titlePanel("BIEN Shiny App: Species-Level Observation Explorer"),
+  tags$div(
+    class = "bien-app-header",
+    tags$div(
+      tags$h2(class = "bien-title", "BIEN Shiny App: Species-Level Observation Explorer"),
+      tags$p(class = "bien-subtitle", "Explore BIEN occurrence, trait, and range evidence with transparent QA summaries")
+    ),
+    tags$div(
+      class = "bien-logo-wrap",
+      tags$img(
+        src = "bien.png",
+        class = "bien-logo",
+        alt = "BIEN logo",
+        onerror = "this.style.display='none'; this.nextElementSibling.style.display='flex';"
+      ),
+      tags$div(class = "bien-logo-fallback", "BIEN")
+    )
+  ),
   sidebarLayout(
     sidebarPanel(
       textInput("species", "Species name", value = "Eschscholzia californica", placeholder = "Genus species"),
@@ -1293,6 +1391,10 @@ server <- function(input, output, session) {
       assign(cache_key, result, envir = query_cache)
       result
     })
+  }, ignoreInit = TRUE)
+
+  observeEvent(bien_results(), {
+    updateTabsetPanel(session, "main_tabs", selected = "Occurrence Map")
   }, ignoreInit = TRUE)
 
   # Lazy-load BIEN trait data only when the user opens one of the trait-focused tabs.
