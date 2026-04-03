@@ -1,5 +1,9 @@
 # BIEN Species Shiny App
 
+[![BIEN logo](bien.png)](https://biendata.org/)
+
+Learn more about BIEN at **[biendata.org](https://biendata.org/)**.
+
 Interactive Shiny app for species-level biodiversity exploration using the BIEN R package, with linked views for occurrences, traits, and species range artifacts.
 
 ## Try it live
