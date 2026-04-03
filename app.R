@@ -45,6 +45,33 @@ safe_bien_retry <- function(call_fn, timeout_sec = 90, attempts = 1, sleep_sec =
   )
 }
 
+# Normalize user-entered species strings so BIEN queries are robust to case.
+normalize_species_name <- function(x) {
+  x <- str_squish(x)
+  if (!nzchar(x)) {
+    return(x)
+  }
+
+  parts <- strsplit(x, "\\s+")[[1]]
+  if (length(parts) >= 1) {
+    genus <- parts[1]
+    parts[1] <- paste0(str_to_upper(substr(genus, 1, 1)), str_to_lower(substr(genus, 2, nchar(genus))))
+  }
+  if (length(parts) >= 2) {
+    parts[2] <- str_to_lower(parts[2])
+  }
+  if (length(parts) >= 3) {
+    # Keep infraspecific epithets normalized while leaving author strings as entered.
+    epithet_idx <- which(str_detect(parts, "^(subsp\\.|var\\.|f\\.)$")) + 1
+    epithet_idx <- epithet_idx[epithet_idx <= length(parts)]
+    if (length(epithet_idx) > 0) {
+      parts[epithet_idx] <- str_to_lower(parts[epithet_idx])
+    }
+  }
+
+  paste(parts, collapse = " ")
+}
+
 # Query BIEN occurrences with the same biological filters used by the BIEN helper,
 # but (1) exclude trait-linked rows that belong in the Traits tab rather than the
 # occurrence map and (2) randomize the returned row order on the BIEN side so
@@ -1150,7 +1177,11 @@ server <- function(input, output, session) {
   bien_results <- eventReactive(list(input$run_query, input$retry_bien), {
     req(nchar(str_trim(input$species)) > 0)
 
-    species_name <- str_squish(input$species)
+    species_input <- str_squish(input$species)
+    species_name <- normalize_species_name(species_input)
+    if (!identical(species_name, species_input)) {
+      updateTextInput(session, "species", value = species_name)
+    }
     retry_mode <- identical(query_trigger(), "retry")
     include_range_query <- if (is.null(input$include_range_query)) FALSE else isTRUE(input$include_range_query)
     timeout_sec <- max(15, as.numeric(input$query_timeout))
