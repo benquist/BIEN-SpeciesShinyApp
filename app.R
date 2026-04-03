@@ -969,9 +969,9 @@ ui <- fluidPage(
         src = "bien.png",
         class = "bien-logo",
         alt = "BIEN logo",
-        onerror = "this.style.display='none'; this.nextElementSibling.style.display='flex';"
+        onerror = "this.parentElement.style.display='none';"
       ),
-      tags$div(class = "bien-logo-fallback", "BIEN")
+      tags$div(class = "bien-logo-fallback", "")
     )
   ),
   sidebarLayout(
