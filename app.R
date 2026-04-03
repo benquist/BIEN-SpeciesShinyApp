@@ -1205,7 +1205,7 @@ ui <- fluidPage(
               class = "bien-pub-card",
               tags$strong("\U0001F4D6 Latest BIEN publication"),
               tags$br(),
-              tags$em("Enquist et al. (2024). BIEN: Botanical Information and Ecology Network. Methods in Ecology and Evolution."),
+              tags$em("Enquist et al. (2026). BIEN: Botanical Information and Ecology Network. Methods in Ecology and Evolution."),
               tags$br(),
               tags$a("https://besjournals.onlinelibrary.wiley.com/doi/abs/10.1111/2041-210x.70274",
                      href = "https://besjournals.onlinelibrary.wiley.com/doi/abs/10.1111/2041-210x.70274", target = "_blank"),
