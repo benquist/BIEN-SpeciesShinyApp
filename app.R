@@ -1803,7 +1803,7 @@ server <- function(input, output, session) {
     mbg_url <- if (identical(species_name, "Pinus ponderosa")) {
       "https://www.missouribotanicalgarden.org/PlantFinder/PlantFinderDetails.aspx?taxonid=285000"
     } else {
-      paste0("https://www.missouribotanicalgarden.org/PlantFinder/PlantFinderSearch.aspx?search=", species_query)
+      paste0("https://www.tropicos.org/name/Search?name=", species_query)
     }
     plant_list_url <- if (identical(species_name, "Pinus ponderosa")) {
       "http://www.theplantlist.org/tpl1.1/record/kew-2562565"
@@ -1829,7 +1829,7 @@ server <- function(input, output, session) {
         class = "bien-link-card",
         tags$strong("Missouri Botanical Garden"), tags$br(),
         tags$a(mbg_url, href = mbg_url, target = "_blank"),
-        tags$p(style = "margin:6px 0 0 0;color:#444;font-size:0.92em;", "Direct Plant Finder link for Pinus ponderosa; otherwise Plant Finder search.")
+        tags$p(style = "margin:6px 0 0 0;color:#444;font-size:0.92em;", "Direct Plant Finder detail for Pinus ponderosa; otherwise Tropicos (Missouri Botanical Garden) name search so species terms carry through.")
       ),
       tags$div(
         class = "bien-link-card",
