@@ -1712,7 +1712,7 @@ server <- function(input, output, session) {
       if (retry_mode) {
         incProgress(0.1, detail = "Retry mode: re-attempting BIEN connection with backoff")
       } else {
-        detail_msg <- if (occ_fetch_limit > 10000) {
+        detail_msg <- if (isTRUE(fast_large_species_mode) || isTRUE(lucky_fast_mode)) {
           "Occurrences: fast-loading large species (randomization disabled for speed)"
         } else {
           "Occurrences: retrieving randomized sample of records from BIEN"
@@ -1728,7 +1728,7 @@ server <- function(input, output, session) {
         connection_retry = retry_mode,
         max_plans = if (isTRUE(lucky_fast_mode)) 1 else 3,
         per_plan_timeout = if (isTRUE(lucky_fast_mode)) 8 else 20,
-        randomize_order = !isTRUE(lucky_fast_mode) && occ_fetch_limit <= 10000
+        randomize_order = !isTRUE(fast_large_species_mode) && !isTRUE(lucky_fast_mode)
       )
       occ <- occ_bundle$data
       occ_strategy <- occ_bundle$strategy
