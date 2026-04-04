@@ -371,15 +371,14 @@ count_occurrence_records <- function(species_name, cultivated = FALSE, natives_o
 # the total matching occurrence records appear to be specimens, iNaturalist records,
 # plots/surveys, trait-linked rows, or other provenance classes.
 count_occurrence_source_mix <- function(species_name, cultivated = FALSE, natives_only = TRUE, only_geovalid = TRUE, timeout_sec = 30) {
-  mix_res <- safe_bien_call({
-    cultivated_ <- BIEN:::.cultivated_check(cultivated)
-    newworld_ <- BIEN:::.newworld_check(NULL)
-    natives_ <- BIEN:::.natives_check(natives_only)
-    observation_ <- BIEN:::.observation_check(TRUE)
-    geovalid_ <- BIEN:::.geovalid_check(only_geovalid)
+  cultivated_ <- BIEN:::.cultivated_check(cultivated)
+  newworld_ <- BIEN:::.newworld_check(NULL)
+  natives_ <- BIEN:::.natives_check(natives_only)
+  observation_ <- BIEN:::.observation_check(TRUE)
+  geovalid_ <- BIEN:::.geovalid_check(only_geovalid)
 
-    combined_sql <- "lower(coalesce(observation_type, '') || ' ' || coalesce(datasource, '') || ' ' || coalesce(dataset, ''))"
-    mix_query <- paste(
+  build_mix_query <- function(combined_sql) {
+    paste(
       "SELECT CASE",
       paste0("WHEN ", combined_sql, " LIKE '%inaturalist%' THEN 'iNaturalist'"),
       paste0("WHEN ", combined_sql, " LIKE '%trait%' OR ", combined_sql, " LIKE '%measurement%' THEN 'Traits'"),
@@ -395,9 +394,24 @@ count_occurrence_source_mix <- function(species_name, cultivated = FALSE, native
       "AND scrubbed_species_binomial IS NOT NULL",
       "GROUP BY source_group ORDER BY n_records DESC;"
     )
+  }
 
-    BIEN:::.BIEN_sql(mix_query, fetch.query = FALSE)
-  }, timeout_sec = min(timeout_sec, 8))
+  # First try to include basisofrecord in the provenance string so this BIEN-side
+  # grouped count is closer to the app's observation-category logic.
+  combined_sql_with_basis <- "lower(coalesce(observation_type, '') || ' ' || coalesce(datasource, '') || ' ' || coalesce(dataset, '') || ' ' || coalesce(basisofrecord, ''))"
+  combined_sql_base <- "lower(coalesce(observation_type, '') || ' ' || coalesce(datasource, '') || ' ' || coalesce(dataset, ''))"
+
+  mix_res <- suppressWarnings(safe_bien_call(
+    BIEN:::.BIEN_sql(build_mix_query(combined_sql_with_basis), fetch.query = FALSE),
+    timeout_sec = min(timeout_sec, 8)
+  ))
+
+  if (inherits(mix_res, "error") || !is.data.frame(mix_res) || nrow(mix_res) == 0) {
+    mix_res <- safe_bien_call(
+      BIEN:::.BIEN_sql(build_mix_query(combined_sql_base), fetch.query = FALSE),
+      timeout_sec = min(timeout_sec, 8)
+    )
+  }
 
   if (inherits(mix_res, "error") || !is.data.frame(mix_res) || nrow(mix_res) == 0) {
     return(NULL)
@@ -1906,6 +1920,22 @@ server <- function(input, output, session) {
     } else {
       "Not available"
     }
+    sample_plot_n <- if (is.data.frame(res$occurrences) && "observation_category" %in% names(res$occurrences)) {
+      sum(res$occurrences$observation_category == "Plot / survey", na.rm = TRUE)
+    } else {
+      NA_real_
+    }
+    source_mix_plot_n <- if (is.data.frame(summary_bundle$source_mix)) {
+      idx <- which(as.character(summary_bundle$source_mix$source_group) == "Plots")
+      if (length(idx) > 0) sum(as.numeric(summary_bundle$source_mix$n_records[idx]), na.rm = TRUE) else 0
+    } else {
+      NA_real_
+    }
+    source_mix_mismatch_note <- if (!is.na(sample_plot_n) && !is.na(source_mix_plot_n) && sample_plot_n > 0 && source_mix_plot_n == 0) {
+      "The BIEN-wide source fraction and app-sample categories are derived from different workflows: BIEN provenance fractions come from a separate BIEN-side grouped count query, while app categories come from the downloaded sampled table used for mapping. Compare both, but treat app-sample categories as sample composition rather than full-database fractions."
+    } else {
+      NULL
+    }
     introduced_line <- summarize_status_counts(
       mapped_df,
       c("native_status", "is_introduced"),
@@ -1989,7 +2019,12 @@ server <- function(input, output, session) {
         ""
       },
       "<br><strong>Query elapsed time:</strong> ", query_elapsed_txt,
-      "<br><strong>Observation categories:</strong> ", category_line,
+      "<br><strong>Observation categories in app sample:</strong> ", category_line,
+      if (!is.null(source_mix_mismatch_note)) {
+        paste0("<br><strong>Category reconciliation note:</strong> ", source_mix_mismatch_note)
+      } else {
+        ""
+      },
       "<br><strong>Mappable occurrence points:</strong> ", mappable_n,
       "<br><strong>Mapped-point native / introduced status:</strong> ", introduced_line,
       "<br><strong>Mapped-point cultivated status:</strong> ", cultivated_line,
