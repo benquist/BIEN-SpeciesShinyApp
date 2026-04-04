@@ -615,22 +615,12 @@ count_occurrence_source_mix <- function(species_name, cultivated = FALSE, native
     )
   }
 
-  # First try to include basisofrecord in the provenance string so this BIEN-side
-  # grouped count is closer to the app's observation-category logic.
-  combined_sql_with_basis <- "lower(coalesce(observation_type, '') || ' ' || coalesce(datasource, '') || ' ' || coalesce(dataset, '') || ' ' || coalesce(basisofrecord, ''))"
-  combined_sql_base <- "lower(coalesce(observation_type, '') || ' ' || coalesce(datasource, '') || ' ' || coalesce(dataset, ''))"
+  combined_sql <- "lower(coalesce(observation_type, '') || ' ' || coalesce(datasource, '') || ' ' || coalesce(dataset, ''))"
 
-  mix_res <- suppressWarnings(safe_bien_call(
-    BIEN:::.BIEN_sql(build_mix_query(combined_sql_with_basis), fetch.query = FALSE),
+  mix_res <- safe_bien_call(
+    BIEN:::.BIEN_sql(build_mix_query(combined_sql), fetch.query = FALSE),
     timeout_sec = min(timeout_sec, 8)
-  ))
-
-  if (inherits(mix_res, "error") || !is.data.frame(mix_res) || nrow(mix_res) == 0) {
-    mix_res <- safe_bien_call(
-      BIEN:::.BIEN_sql(build_mix_query(combined_sql_base), fetch.query = FALSE),
-      timeout_sec = min(timeout_sec, 8)
-    )
-  }
+  )
 
   if (inherits(mix_res, "error") || !is.data.frame(mix_res) || nrow(mix_res) == 0) {
     return(NULL)
