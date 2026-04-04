@@ -242,8 +242,18 @@ query_occurrence_with_fallback <- function(species_name, input, occ_limit, occ_p
   notes <- character()
   last_result <- NULL
   attempts_n <- if (isTRUE(connection_retry)) 3 else 1
+  query_started <- Sys.time()
+  deadline <- query_started + as.numeric(timeout_sec)
 
   for (plan in plans) {
+    remaining_sec <- as.numeric(difftime(deadline, Sys.time(), units = "secs"))
+    if (!is.finite(remaining_sec) || remaining_sec <= 1) {
+      notes <- c(notes, "occ_timeout_budget_exhausted")
+      break
+    }
+
+    plan_timeout_sec <- max(2, min(per_plan_timeout, remaining_sec))
+
     res <- safe_bien_retry(
       function() {
         query_occurrence_randomized(
@@ -256,7 +266,7 @@ query_occurrence_with_fallback <- function(species_name, input, occ_limit, occ_p
           randomize_order = randomize_order
         )
       },
-      timeout_sec = min(timeout_sec, per_plan_timeout),
+      timeout_sec = plan_timeout_sec,
       attempts = attempts_n,
       sleep_sec = 1,
       exponential_backoff = isTRUE(connection_retry),
@@ -274,13 +284,19 @@ query_occurrence_with_fallback <- function(species_name, input, occ_limit, occ_p
       err_msg <- conditionMessage(res$result)
       notes <- c(notes, paste("occ_error:", err_msg))
 
-      if (is_bien_connection_error(err_msg)) {
+      if (is_bien_connection_error(err_msg) || is_bien_timeout_error(err_msg)) {
         break
       }
     }
   }
 
-  final_strategy <- if (is_bien_connection_error(notes)) "backend_connection_error" else "none"
+  final_strategy <- if (is_bien_connection_error(notes)) {
+    "backend_connection_error"
+  } else if (is_bien_timeout_error(notes)) {
+    "backend_timeout_error"
+  } else {
+    "none"
+  }
   list(data = last_result, strategy = final_strategy, notes = notes, limit_used = fast_limit)
 }
 
@@ -789,6 +805,18 @@ is_bien_connection_error <- function(messages) {
 
   any(grepl(
     "could not connect|remaining connection slots|error connecting to the BIEN database",
+    messages,
+    ignore.case = TRUE
+  ))
+}
+
+is_bien_timeout_error <- function(messages) {
+  if (length(messages) == 0 || all(is.na(messages))) {
+    return(FALSE)
+  }
+
+  any(grepl(
+    "elapsed time limit|timeout|time limit|pending rows|could not create execute|statement timeout",
     messages,
     ignore.case = TRUE
   ))
