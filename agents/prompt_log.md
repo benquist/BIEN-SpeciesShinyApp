@@ -24,3 +24,10 @@
 - Result: Verified shinyapps endpoint is live (HTTP 200) and repo is synced.
 - Files changed: agents/prompt_log.md
 - Completed by: GitHub Copilot
+
+- Date: 2026-04-04
+- Prompt summary: User reported slow Lupinus response with incorrect fallback note '(none)' and broken mapped fraction text.
+- Requested outcomes: Fix incorrect fallback notice logic and mapped fraction display issue.
+- Result: Fallback notice now only appears for true fallback strategies; mapped fraction notices now guard against NA/NaN values.
+- Files changed: app.R; rsconnect/shinyapps.io/benquist/bien-species-shinyapp.dcf; agents/prompt_log.md
+- Completed by: GitHub Copilot
