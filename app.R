@@ -1584,18 +1584,12 @@ server <- function(input, output, session) {
       updateNumericInput(session, "map_point_cap", value = min(1000, max(100, as.numeric(input$map_point_cap))))
       updateNumericInput(session, "query_timeout", value = min(15, max(10, as.numeric(input$query_timeout))))
       last_lucky_species(lucky$species)
-      forced_query_species(lucky$species)
       updateTextInput(session, "species", value = lucky$species)
       showNotification(
-        paste0("Lucky species: ", lucky$species, ". Running a fast first-pass query..."),
+        paste0("Lucky species selected: ", lucky$species, ". Click 'Query BIEN' to run the query."),
         type = "message",
         duration = 6
       )
-
-      session$onFlushed(function() {
-        manual_query_nonce(isolate(manual_query_nonce()) + 1L)
-        query_trigger("run")
-      }, once = TRUE)
       incProgress(1)
     })
   }, ignoreInit = TRUE)
