@@ -277,6 +277,87 @@ query_occurrence_with_fallback <- function(species_name, input, occ_limit, occ_p
   list(data = last_result, strategy = final_strategy, notes = notes, limit_used = fast_limit)
 }
 
+get_random_bien_species_candidate <- function(timeout_sec = 10) {
+  candidate_query <- paste(
+    "SELECT scrubbed_species_binomial",
+    "FROM view_full_occurrence_individual",
+    "WHERE scrubbed_species_binomial IS NOT NULL",
+    "AND latitude IS NOT NULL AND longitude IS NOT NULL",
+    "AND latitude BETWEEN -90 AND 90",
+    "AND longitude BETWEEN -180 AND 180",
+    "AND higher_plant_group NOT IN ('Algae','Bacteria','Fungi')",
+    "ORDER BY random() LIMIT 1;"
+  )
+
+  out <- safe_bien_call(BIEN:::.BIEN_sql(candidate_query, fetch.query = FALSE), timeout_sec = timeout_sec)
+  if (inherits(out, "error") || !is.data.frame(out) || nrow(out) == 0) {
+    return(NULL)
+  }
+
+  species_col <- find_first_col(out, c("scrubbed_species_binomial", "species", "scientific_name"))
+  if (is.null(species_col)) {
+    return(NULL)
+  }
+
+  species_name <- normalize_species_name(as.character(out[[species_col]][1]))
+  if (!nzchar(species_name)) {
+    return(NULL)
+  }
+
+  species_name
+}
+
+find_lucky_species_with_mappable_points <- function(input, min_mappable_points = 30, max_attempts = 10, timeout_sec = 20) {
+  filter_cfg <- resolve_filter_profile(input)
+  include_cultivated <- if (filter_cfg$use_cultivated_filter) filter_cfg$include_cultivated else TRUE
+  natives_only <- if (filter_cfg$use_introduced_filter) filter_cfg$natives_only else FALSE
+  only_geovalid <- filter_cfg$only_geovalid
+  query_limit <- max(1000, min_mappable_points * 4)
+  check_timeout <- min(timeout_sec, 15)
+
+  for (i in seq_len(max_attempts)) {
+    candidate <- get_random_bien_species_candidate(timeout_sec = min(timeout_sec, 10))
+    if (is.null(candidate)) {
+      next
+    }
+
+    occ <- safe_bien_call(
+      query_occurrence_randomized(
+        species_name = candidate,
+        cultivated = include_cultivated,
+        natives_only = natives_only,
+        only_geovalid = only_geovalid,
+        limit = query_limit,
+        record_limit = min(5000, query_limit)
+      ),
+      timeout_sec = check_timeout
+    )
+
+    if (!is.data.frame(occ) || nrow(occ) == 0) {
+      next
+    }
+
+    occ <- categorize_observation_records(occ)
+    if (isTRUE(filter_cfg$exclude_human_observation_records)) {
+      occ <- occ %>%
+        filter(!observation_category %in% c("Citizen science (iNaturalist)", "Field observation (HumanObservation)"))
+    }
+
+    prepared <- prepare_occurrences(
+      occ,
+      map_point_cap = max(min_mappable_points, min(50000, if (is.null(input$map_point_cap)) 1000 else as.numeric(input$map_point_cap))),
+      sample_method = "random"
+    )
+
+    mappable_n <- if (is.data.frame(prepared$data)) nrow(prepared$data) else 0
+    if (mappable_n >= min_mappable_points) {
+      return(list(status = "ok", species = candidate, mappable_n = mappable_n, attempts = i))
+    }
+  }
+
+  list(status = "not_found", species = NULL, mappable_n = NA_integer_, attempts = max_attempts)
+}
+
 find_first_col <- function(df, candidates) {
   if (!is.data.frame(df) || nrow(df) == 0) {
     return(NULL)
@@ -1106,6 +1187,7 @@ ui <- fluidPage(
       checkboxInput("enable_taxon_autocorrect", "Suggest closest BIEN taxon spelling when no exact match", value = TRUE),
       uiOutput("spelling_suggestion_ui"),
       actionButton("run_query", "Query BIEN", class = "btn-primary"),
+      actionButton("feeling_lucky_species", "I'm Feeling Lucky (random BIEN species)", class = "btn-success btn-sm"),
       uiOutput("retry_bien_ui"),
       tags$script(HTML("$(document).on('keydown', '#species', function(e) { if (e.key === 'Enter') { $('#run_query').click(); return false; } });")),
       tags$div(
@@ -1455,6 +1537,41 @@ server <- function(input, output, session) {
   }, ignoreInit = TRUE)
   observeEvent(input$retry_bien, {
     query_trigger("retry")
+  }, ignoreInit = TRUE)
+
+  observeEvent(input$feeling_lucky_species, {
+    withProgress(message = "Finding a lucky BIEN species", detail = "Sampling random species with >= 30 mappable points", value = 0, {
+      incProgress(0.2, detail = "Checking random BIEN plant species candidates")
+      lucky <- find_lucky_species_with_mappable_points(
+        input = input,
+        min_mappable_points = 30,
+        max_attempts = 10,
+        timeout_sec = max(15, as.numeric(input$query_timeout))
+      )
+
+      if (!identical(lucky$status, "ok") || is.null(lucky$species)) {
+        showNotification(
+          "Could not find a random species with at least 30 mappable points under current filters. Try broadening filters and click I'm Feeling Lucky again.",
+          type = "warning",
+          duration = 8
+        )
+        return(NULL)
+      }
+
+      incProgress(0.8, detail = paste("Selected", lucky$species, "- updating query"))
+      updateTextInput(session, "species", value = lucky$species)
+      showNotification(
+        paste0("Lucky species: ", lucky$species, " (", lucky$mappable_n, " mappable points in pre-check). Running BIEN query..."),
+        type = "message",
+        duration = 6
+      )
+
+      session$onFlushed(function() {
+        manual_query_nonce(isolate(manual_query_nonce()) + 1L)
+        query_trigger("run")
+      }, once = TRUE)
+      incProgress(1)
+    })
   }, ignoreInit = TRUE)
 
   bien_results <- eventReactive(list(input$run_query, input$retry_bien, manual_query_nonce()), {
