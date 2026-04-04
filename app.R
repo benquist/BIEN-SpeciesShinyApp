@@ -217,7 +217,7 @@ resolve_filter_profile <- function(input) {
   )
 }
 
-query_occurrence_with_fallback <- function(species_name, input, occ_limit, occ_page_size, timeout_sec, connection_retry = FALSE) {
+query_occurrence_with_fallback <- function(species_name, input, occ_limit, occ_page_size, timeout_sec, connection_retry = FALSE, max_plans = 3, per_plan_timeout = 25) {
   filter_cfg <- resolve_filter_profile(input)
   include_cultivated <- if (filter_cfg$use_cultivated_filter) filter_cfg$include_cultivated else TRUE
   natives_only <- if (filter_cfg$use_introduced_filter) filter_cfg$natives_only else FALSE
@@ -234,6 +234,7 @@ query_occurrence_with_fallback <- function(species_name, input, occ_limit, occ_p
     list(label = "fallback_relaxed_native", natives.only = FALSE, only.geovalid = only_geovalid, limit = min(fast_limit, 500), record_limit = min(fast_page_size, 500)),
     list(label = "fallback_relaxed_geo", natives.only = FALSE, only.geovalid = FALSE, limit = min(fast_limit, 500), record_limit = min(fast_page_size, 500))
   )
+  plans <- plans[seq_len(max(1, min(length(plans), as.integer(max_plans))))]
 
   notes <- character()
   last_result <- NULL
@@ -251,7 +252,7 @@ query_occurrence_with_fallback <- function(species_name, input, occ_limit, occ_p
           record_limit = plan$record_limit
         )
       },
-      timeout_sec = min(timeout_sec, 25),
+      timeout_sec = min(timeout_sec, per_plan_timeout),
       attempts = attempts_n,
       sleep_sec = 1,
       exponential_backoff = isTRUE(connection_retry),
@@ -1530,6 +1531,7 @@ server <- function(input, output, session) {
   trait_cache <- new.env(parent = emptyenv())
   range_cache <- new.env(parent = emptyenv())
   manual_query_nonce <- reactiveVal(0L)
+  last_lucky_species <- reactiveVal(NULL)
 
   get_cached_result <- function(cache_env, cache_key) {
     if (is.null(cache_key) || !exists(cache_key, envir = cache_env, inherits = FALSE)) {
@@ -1575,6 +1577,8 @@ server <- function(input, output, session) {
       updateCheckboxInput(session, "fast_large_species_mode", value = TRUE)
       updateNumericInput(session, "occurrence_limit", value = min(2000, max(200, as.numeric(input$occurrence_limit))))
       updateNumericInput(session, "map_point_cap", value = min(1000, max(100, as.numeric(input$map_point_cap))))
+      updateNumericInput(session, "query_timeout", value = min(15, max(10, as.numeric(input$query_timeout))))
+      last_lucky_species(lucky$species)
       updateTextInput(session, "species", value = lucky$species)
       showNotification(
         paste0("Lucky species: ", lucky$species, ". Running a fast first-pass query..."),
@@ -1606,6 +1610,15 @@ server <- function(input, output, session) {
     map_sampling_method <- if (is.null(input$map_sampling_method)) "datasource" else input$map_sampling_method
     display_sampling_method <- if (sample_random) map_sampling_method else "head"
     fast_large_species_mode <- if (is.null(input$fast_large_species_mode)) TRUE else isTRUE(input$fast_large_species_mode)
+    lucky_fast_mode <- {
+      lucky_species <- isolate(last_lucky_species())
+      !is.null(lucky_species) && nzchar(lucky_species) && tolower(lucky_species) == tolower(species_name)
+    }
+    if (isTRUE(lucky_fast_mode)) {
+      timeout_sec <- min(timeout_sec, 12)
+      occ_limit <- min(occ_limit, 1500)
+      map_point_cap <- min(map_point_cap, 800)
+    }
     occ_page_size <- min(1000, max(occ_limit, 500))
     base_occ_fetch_limit <- min(if (identical(display_sampling_method, "head")) occ_limit else max(occ_limit * 2, 1000), 50000)
     fast_mode_fetch_cap <- max(2000, min(10000, map_point_cap * 3))
@@ -1654,7 +1667,16 @@ server <- function(input, output, session) {
       } else {
         incProgress(0.15, detail = "Occurrences: retrieving records from BIEN (large or widespread species can take longer)")
       }
-      occ_bundle <- query_occurrence_with_fallback(species_name, input, occ_fetch_limit, occ_page_size, timeout_sec, connection_retry = retry_mode)
+      occ_bundle <- query_occurrence_with_fallback(
+        species_name,
+        input,
+        occ_fetch_limit,
+        occ_page_size,
+        timeout_sec,
+        connection_retry = retry_mode,
+        max_plans = if (isTRUE(lucky_fast_mode)) 1 else 3,
+        per_plan_timeout = if (isTRUE(lucky_fast_mode)) 10 else 25
+      )
       occ <- occ_bundle$data
       occ_strategy <- occ_bundle$strategy
       occ_limit_used <- occ_bundle$limit_used
