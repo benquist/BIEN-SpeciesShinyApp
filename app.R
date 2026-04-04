@@ -307,52 +307,66 @@ get_random_bien_species_candidate <- function(timeout_sec = 10) {
   species_name
 }
 
-find_lucky_species_with_mappable_points <- function(input, min_mappable_points = 30, max_attempts = 10, timeout_sec = 20) {
+count_mappable_occurrences_for_species <- function(species_name, cultivated = FALSE, natives_only = TRUE, only_geovalid = TRUE, timeout_sec = 8) {
+  cultivated_ <- BIEN:::.cultivated_check(cultivated)
+  newworld_ <- BIEN:::.newworld_check(NULL)
+  natives_ <- BIEN:::.natives_check(natives_only)
+  observation_ <- BIEN:::.observation_check(TRUE)
+  geovalid_ <- BIEN:::.geovalid_check(only_geovalid)
+
+  count_query <- paste(
+    "SELECT COUNT(*) AS mappable_n",
+    "FROM view_full_occurrence_individual",
+    "WHERE scrubbed_species_binomial in (", paste(sql_quote_literal(species_name), collapse = ", "), ")",
+    cultivated_$query, newworld_$query, natives_$query, observation_$query, geovalid_$query,
+    "AND higher_plant_group NOT IN ('Algae','Bacteria','Fungi')",
+    "AND (georef_protocol is NULL OR georef_protocol<>'county centroid')",
+    "AND (is_centroid IS NULL OR is_centroid=0)",
+    "AND scrubbed_species_binomial IS NOT NULL",
+    "AND latitude IS NOT NULL AND longitude IS NOT NULL",
+    "AND latitude BETWEEN -90 AND 90",
+    "AND longitude BETWEEN -180 AND 180;"
+  )
+
+  out <- safe_bien_call(BIEN:::.BIEN_sql(count_query, fetch.query = FALSE), timeout_sec = timeout_sec)
+  if (inherits(out, "error") || !is.data.frame(out) || nrow(out) == 0) {
+    return(NA_real_)
+  }
+
+  count_col <- find_first_col(out, c("mappable_n", "count"))
+  if (is.null(count_col)) {
+    return(NA_real_)
+  }
+
+  suppressWarnings(as.numeric(out[[count_col]][1]))
+}
+
+find_lucky_species_with_mappable_points <- function(input, min_mappable_points = 30, max_attempts = 6, timeout_sec = 20) {
   filter_cfg <- resolve_filter_profile(input)
   include_cultivated <- if (filter_cfg$use_cultivated_filter) filter_cfg$include_cultivated else TRUE
   natives_only <- if (filter_cfg$use_introduced_filter) filter_cfg$natives_only else FALSE
   only_geovalid <- filter_cfg$only_geovalid
-  query_limit <- max(1000, min_mappable_points * 4)
-  check_timeout <- min(timeout_sec, 15)
+  check_timeout <- min(timeout_sec, 8)
 
   for (i in seq_len(max_attempts)) {
-    candidate <- get_random_bien_species_candidate(timeout_sec = min(timeout_sec, 10))
+    candidate <- get_random_bien_species_candidate(timeout_sec = min(timeout_sec, 4))
     if (is.null(candidate)) {
       next
     }
 
-    occ <- safe_bien_call(
-      query_occurrence_randomized(
-        species_name = candidate,
-        cultivated = include_cultivated,
-        natives_only = natives_only,
-        only_geovalid = only_geovalid,
-        limit = query_limit,
-        record_limit = min(5000, query_limit)
-      ),
+    mappable_n <- count_mappable_occurrences_for_species(
+      species_name = candidate,
+      cultivated = include_cultivated,
+      natives_only = natives_only,
+      only_geovalid = only_geovalid,
       timeout_sec = check_timeout
     )
 
-    if (!is.data.frame(occ) || nrow(occ) == 0) {
+    if (is.na(mappable_n) || mappable_n < min_mappable_points) {
       next
     }
 
-    occ <- categorize_observation_records(occ)
-    if (isTRUE(filter_cfg$exclude_human_observation_records)) {
-      occ <- occ %>%
-        filter(!observation_category %in% c("Citizen science (iNaturalist)", "Field observation (HumanObservation)"))
-    }
-
-    prepared <- prepare_occurrences(
-      occ,
-      map_point_cap = max(min_mappable_points, min(50000, if (is.null(input$map_point_cap)) 1000 else as.numeric(input$map_point_cap))),
-      sample_method = "random"
-    )
-
-    mappable_n <- if (is.data.frame(prepared$data)) nrow(prepared$data) else 0
-    if (mappable_n >= min_mappable_points) {
-      return(list(status = "ok", species = candidate, mappable_n = mappable_n, attempts = i))
-    }
+    return(list(status = "ok", species = candidate, mappable_n = as.integer(mappable_n), attempts = i))
   }
 
   list(status = "not_found", species = NULL, mappable_n = NA_integer_, attempts = max_attempts)
@@ -1227,6 +1241,7 @@ ui <- fluidPage(
       uiOutput("filter_selection_summary"),
       numericInput("occurrence_limit", "Occurrence records to keep in app sample", value = 1000, min = 200, max = 50000, step = 200),
       numericInput("map_point_cap", "Max mapped occurrence points", value = 800, min = 100, max = 50000, step = 100),
+      checkboxInput("fast_large_species_mode", "Fast mode for large species (recommended: shorter waits, smaller first-pass sample)", value = TRUE),
       checkboxInput("randomize_occurrence_sample", "Allow randomized or balanced subsampling for the displayed app sample (turn off to keep the returned BIEN sample as-is)", value = TRUE),
       selectInput("map_sampling_method", "If too many occurrence records are available, balance the display using", choices = c("Balanced by datasource" = "datasource", "Balanced by observation type" = "observation_type", "Balanced by broader observation category" = "observation_category", "Random sample" = "random", "First returned" = "head"), selected = "datasource"),
       selectInput("map_color_by", "Color map points by", choices = c("Observation category" = "category", "Raw BIEN observation_type" = "type"), selected = "category"),
@@ -1545,13 +1560,13 @@ server <- function(input, output, session) {
       lucky <- find_lucky_species_with_mappable_points(
         input = input,
         min_mappable_points = 30,
-        max_attempts = 10,
-        timeout_sec = max(15, as.numeric(input$query_timeout))
+        max_attempts = 6,
+        timeout_sec = min(20, max(10, as.numeric(input$query_timeout)))
       )
 
       if (!identical(lucky$status, "ok") || is.null(lucky$species)) {
         showNotification(
-          "Could not find a random species with at least 30 mappable points under current filters. Try broadening filters and click I'm Feeling Lucky again.",
+          "Could not quickly find a random species with at least 30 mappable points under current filters. Try broadening filters and click I'm Feeling Lucky again.",
           type = "warning",
           duration = 8
         )
@@ -1589,8 +1604,15 @@ server <- function(input, output, session) {
     filter_cfg <- resolve_filter_profile(input)
     map_sampling_method <- if (is.null(input$map_sampling_method)) "datasource" else input$map_sampling_method
     display_sampling_method <- if (sample_random) map_sampling_method else "head"
+    fast_large_species_mode <- if (is.null(input$fast_large_species_mode)) TRUE else isTRUE(input$fast_large_species_mode)
     occ_page_size <- min(1000, max(occ_limit, 500))
-    occ_fetch_limit <- min(if (identical(display_sampling_method, "head")) occ_limit else max(occ_limit * 2, 1000), 50000)
+    base_occ_fetch_limit <- min(if (identical(display_sampling_method, "head")) occ_limit else max(occ_limit * 2, 1000), 50000)
+    fast_mode_fetch_cap <- max(2000, min(10000, map_point_cap * 3))
+    occ_fetch_limit <- if (isTRUE(fast_large_species_mode)) {
+      min(base_occ_fetch_limit, fast_mode_fetch_cap)
+    } else {
+      base_occ_fetch_limit
+    }
     trait_fetch_limit <- min(trait_limit, 1000)
     range_dir <- file.path(tempdir(), "bien_ranges_cache", gsub("\\s+", "_", species_name))
     dir.create(range_dir, recursive = TRUE, showWarnings = FALSE)
@@ -1604,6 +1626,7 @@ server <- function(input, output, session) {
       trait_limit,
       sample_random,
       map_sampling_method,
+      fast_large_species_mode,
       filter_cfg$use_default_profile,
       filter_cfg$use_cultivated_filter,
       filter_cfg$include_cultivated,
@@ -1685,6 +1708,7 @@ server <- function(input, output, session) {
         map_point_cap = map_point_cap,
         trait_limit = trait_limit,
         occ_fetch_limit = occ_limit_used,
+        fast_large_species_mode = fast_large_species_mode,
         trait_fetch_limit = trait_fetch_limit,
         occ_strategy = occ_strategy,
         use_default_filter_profile = filter_cfg$use_default_profile,
@@ -2655,6 +2679,7 @@ server <- function(input, output, session) {
       "<br><strong>Query timeout:</strong> ", res$timeout_sec, " sec",
       "<br><strong>Occurrence limit requested:</strong> ", res$occ_limit,
       "<br><strong>Occurrence fetch cap used:</strong> ", res$occ_fetch_limit,
+      "<br><strong>Fast mode for large species:</strong> ", ifelse(isTRUE(res$fast_large_species_mode), "on (shorter waits, smaller first-pass sample)", "off (larger pulls, slower for widespread species)"),
       "<br><strong>Trait limit requested:</strong> ", res$trait_limit,
       "<br><strong>Trait fetch cap used:</strong> ", res$trait_fetch_limit,
       "<br><strong>Use BIEN is_cultivated filter:</strong> ", ifelse(res$use_cultivated_filter, paste0("yes (include cultivated = ", tolower(as.character(res$include_cultivated)), ")"), "no"),
