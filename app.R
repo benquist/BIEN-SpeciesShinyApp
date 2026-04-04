@@ -2357,60 +2357,8 @@ server <- function(input, output, session) {
     })
   })
 
-  # Keep the potentially slower BIEN total-count and source-mix queries manual so
-  # opening Summary Statistics does not block the whole app.
-  observeEvent(bien_results(), {
-    res <- bien_results()
-    req(res)
-
-    cache_key <- paste0(res$query_cache_key, "||summary")
-    cached <- get_cached_result(summary_cache, cache_key)
-    if (!is.null(cached) && !is.null(cached$total) && !is.na(cached$total) && !is.null(cached$total_all) && !is.na(cached$total_all)) {
-      return(NULL)
-    }
-
-    use_cultivated_filter <- isTRUE(res$use_cultivated_filter)
-    use_introduced_filter <- isTRUE(res$use_introduced_filter)
-    count_include_cultivated <- if (use_cultivated_filter) isTRUE(res$include_cultivated) else TRUE
-    count_natives_only <- if (identical(res$occ_strategy, "fallback_relaxed_native") || identical(res$occ_strategy, "fallback_relaxed_geo")) {
-      FALSE
-    } else if (use_introduced_filter) {
-      isTRUE(res$natives_only)
-    } else {
-      FALSE
-    }
-    count_only_geovalid <- if (identical(res$occ_strategy, "fallback_relaxed_geo")) {
-      FALSE
-    } else {
-      isTRUE(res$only_geovalid)
-    }
-
-    occ_total_info <- count_occurrence_records(
-      species_name = res$species,
-      cultivated = count_include_cultivated,
-      natives_only = count_natives_only,
-      only_geovalid = count_only_geovalid,
-      timeout_sec = min(res$timeout_sec, 20)
-    )
-
-    occ_total_all_info <- count_occurrence_records(
-      species_name = res$species,
-      cultivated = TRUE,
-      natives_only = FALSE,
-      only_geovalid = FALSE,
-      timeout_sec = min(res$timeout_sec, 20)
-    )
-
-    out <- list(
-      total = occ_total_info$total,
-      note = occ_total_info$note,
-      total_all = occ_total_all_info$total,
-      total_all_note = occ_total_all_info$note,
-      source_mix = if (!is.null(cached)) cached$source_mix else NULL,
-      loaded = !is.null(cached) && isTRUE(cached$loaded)
-    )
-    set_summary_cache(cache_key, out)
-  }, ignoreInit = TRUE)
+  # Keep BIEN total-count and source-mix queries strictly manual. Automatic
+  # post-query prefetch can be slow enough to look like the main query is hung.
 
   summary_results <- eventReactive(input$load_summary_counts, {
     res <- bien_results()
