@@ -207,7 +207,48 @@ cd "/Users/brianjenquist/VSCode/BIEN Shiny App"
 
 ---
 
-## 12. Known limitations and interpretation guardrails
+## 12. Observation record categorization and Darwin Core alignment
+
+The app classifies all returned occurrence records into **observation category** groups to help users understand the source type and ecological meaning of each record. This categorization is scientifically grounded in **Darwin Core** standards for `basisOfRecord` and `observationType`.
+
+### Observation categories and their mapping to Darwin Core
+
+| App Category | Darwin Core basisOfRecord | Ecological Meaning | Use Caution |
+|---|---|---|---|
+| **Specimen / herbarium** | `PreservedSpecimen`, `LivingSpecimen` | Curated, historically documented material. High identification reliability. No temporal uncertainty in collection. | Older specimens may have location / taxonomy issues. Museum-assigned ID may not be current. |
+| **Plot / survey** | `FeatureObservation`, structured inventory records | Systematic sampling or formal inventories. Includes vegetation plots, forest inventories, plot networks. Often replicated and repeatable. | "Plot" terminology may conflate formal networks (e.g., NEON, FIA) with informal author surveys. Coordinate centering to plot centroid may not represent true occurrence distribution. |
+| **Citizen science (iNaturalist)** | `HumanObservation` (iNaturalist-specific annotation) | Unstructured volunteer observations from iNaturalist platform. Community-verified IDs in many cases. Observational photographs. | Identifications are crowdsourced. No post-verification curation. Temporal distribution may reflect observer effort rather than species phenology. |
+| **Citizen science / field observation** | `HumanObservation` (Darwin Core standard) | Field observations, unstructured human sightings, or observational records from BIEN that are not iNaturalist. May include expert naturalist field notes, unpublished survey data, or general occurrence reports. | Source of identification/expertise varies widely. Temporal/geographic bias reflects observer effort. Coordinates may lack precision validation. |
+| **GBIF / other aggregator** | Mixed (preserved specimens, other heritage data, automated records) | Records served by GBIF that do not explicitly match higher-priority categories. Includes museum specimens, checklists, machine observations, and biodiversity databases. | Cannot infer ecological meaning without inspecting `basisOfRecord` individually. GBIF aggregation may obscure original data quality provenance. |
+| **Other / unknown** | Not determinable | Unclassified records that do not match above heuristics. May include molecular sequences, checklists interpreted as presence records, or records with insufficient metadata. | Check raw `observation_type` and `datasource` fields for context. |
+
+### Interpretation principles
+
+1. **Specimen and plot records** are generally most suitable for ecological modeling and range inference because they have lower observer-bias and temporal-uncertainty properties.
+2. **Citizen science iNaturalist records** are valuable for range limits and recent occurrence patterns but should be interpreted cautiously for species distribution modeling (observer effort = strong confound).
+3. **GBIF / other aggregator** records are a mixed bag; inspect the original Darwin Core `basisOfRecord` in the raw data export for careful interpretation.
+4. **Avoid relying on taxonomy alone**: Record type (basisOfRecord) is equally important as species name for ecological interpretation. A specimen is a different kind of evidence than an observation.
+
+### Detection logic and robustness
+
+Categories are inferred by text-pattern matching on:
+- BIEN fields: `observation_type`, `datasource`, `dataset`, `basisOfRecord`
+
+**Robustness caveats:**
+- iNaturalist records are prioritized by explicit "iNaturalist" label in datasource/dataset fields. If iNaturalist data enters BIEN without explicit branding, it may be mislabeled as generic "HumanObservation".
+- Specimen detection prioritizes explicit Darwin Core `basisOfRecord` = `PreservedSpecimen` or dataset names mentioning "specimen" / "museum" / "herbarium".
+- Word-boundary matching (e.g., `\bhuman\s+observation\b`) minimizes false positives from dataset names like "observational_plots" or "field_observations_database".
+- If metadata is sparse, records fall to "Other / unknown" rather than guessing.
+
+### Future improvements
+
+- Direct Darwin Core parsing when `basisOfRecord` field is consistently available from BIEN
+- Validation against live collection abbreviations and specimen repositories (e.g., CVH, SERNEC)
+- Confidence scoring for categories with uncertain metadata
+
+---
+
+## 13. Known limitations and interpretation guardrails
 
 - BIEN schemas can vary among species and query contexts.
 - Common or widespread species may still be slow if upstream services are busy.
@@ -218,7 +259,7 @@ cd "/Users/brianjenquist/VSCode/BIEN Shiny App"
 
 ---
 
-## 13. Suggested agent roles for this project
+## 14. Suggested agent roles for this project
 
 Two custom agents support this documentation workflow:
 

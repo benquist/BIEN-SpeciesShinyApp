@@ -287,20 +287,31 @@ categorize_observation_records <- function(df) {
   dataset_txt <- if (!is.null(dataset_col)) as.character(df[[dataset_col]]) else rep("", nrow(df))
   basis_txt <- if (!is.null(basis_col)) as.character(df[[basis_col]]) else rep("", nrow(df))
 
-  combined_txt <- tolower(paste(
-    ifelse(is.na(obs_txt), "", obs_txt),
-    ifelse(is.na(source_txt), "", source_txt),
-    ifelse(is.na(dataset_txt), "", dataset_txt),
-    ifelse(is.na(basis_txt), "", basis_txt)
-  ))
+  obs_txt_lower <- tolower(obs_txt)
+  source_txt_lower <- tolower(source_txt)
+  dataset_txt_lower <- tolower(dataset_txt)
+  basis_txt_lower <- tolower(basis_txt)
+
+  combined_txt <- tolower(paste(obs_txt_lower, source_txt_lower, dataset_txt_lower, basis_txt_lower))
 
   df$observation_category <- case_when(
+    # Preserved specimens (Darwin Core basisOfRecord ~ PreservedSpecimen)
+    str_detect(combined_txt, "specimen|herb|preserved|museum|preservedspecimen") ~ "Specimen / herbarium",
+
+    # Plot / survey records (formal sampling)
+    str_detect(combined_txt, "\\bplot\\b|\\bsurvey\\b|\\binventory\\b|\\bmonitoring\\b") ~ "Plot / survey",
+
+    # iNaturalist citizen science (highest priority for citizen science detection)
     str_detect(combined_txt, "inaturalist") ~ "Citizen science (iNaturalist)",
-    str_detect(combined_txt, "trait|measurement") ~ "Trait measurement",
-    str_detect(combined_txt, "plot|survey|inventory|monitoring") ~ "Plot / survey",
-    str_detect(combined_txt, "specimen|herb|preserved specimen|preservedspecimen|museum") ~ "Specimen / herbarium",
-    str_detect(combined_txt, "human observation|human_observation|observation") & str_detect(combined_txt, "gbif") ~ "Citizen science / GBIF observation",
+
+    # Darwin Core HumanObservation (general citizen science / field observations)
+    # Use word boundary to avoid false positives from "observational_plots", "observation_id", etc.
+    (str_detect(basis_txt_lower, "humanobservation|human observation") |
+     (str_detect(combined_txt, "\\bhuman\\s+observation\\b|\\bhuman_observation\\b") & !str_detect(combined_txt, "specimen|museum|herb"))) ~ "Citizen science / field observation",
+
+    # GBIF-aggregated records (various sources, not specifically citizen science)
     str_detect(combined_txt, "gbif") ~ "GBIF / other aggregator",
+
     TRUE ~ "Other / unknown"
   )
 
