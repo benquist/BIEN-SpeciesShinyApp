@@ -1030,6 +1030,7 @@ ui <- fluidPage(
     mainPanel(
       tabsetPanel(
         id = "main_tabs",
+        selected = "Occurrence Map",
 
         # ── Overview & About tab ──────────────────────────────────────────────
         tabPanel(
