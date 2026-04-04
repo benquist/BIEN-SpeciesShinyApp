@@ -48,6 +48,7 @@ The app organizes BIEN output into several linked views:
 
 ### 2. Summary Statistics
 - Shows the main returned-record summary immediately after a species query.
+- Auto-prefetches BIEN count-only totals in the background (short timeout budget) so mapped-fraction denominators can appear without requiring an extra click when BIEN responds quickly.
 - Can optionally fetch BIEN count-only totals and source-class fractions using the button **`Load BIEN total counts and source mix (slower)`**.
 - Reports the active filter interpretation, the actual BIEN query strategy used, and key QA summaries.
 
@@ -56,15 +57,20 @@ The app organizes BIEN output into several linked views:
 - Displays the returned occurrence records in searchable tabular form.
 - Helps inspect provenance, taxonomic matching, and geographic structure directly.
 
-### 4. Traits and trait summary
+### 4. Observation sources
+
+- Summarizes the app-derived observation categories and provenance fields for source auditing.
+- Helps users separate specimen, plot/survey, HumanObservation field records, and iNaturalist-heavy streams.
+
+### 5. Traits and trait summary
 - Shows raw trait records returned by BIEN.
 - Summarizes trait availability by trait name, units, and number of records.
 
-### 5. Range tab
+### 6. Range tab
 - Displays BIEN range outputs and maps downloaded shapefiles when available.
 - Useful for species where BIEN range artifacts are more complete than occurrence coordinates.
 
-### 6. Reconciliation and error logging
+### 7. Reconciliation and error logging
 - Surfaces matching and query information so that missing points, API timeouts, or schema mismatches are visible rather than silent.
 
 ## Main features
@@ -139,7 +145,7 @@ The sidebar includes controls to tailor the biological interpretation of returne
 - **Use BIEN cultivated vs wild status** — if left on, BIEN cultivated metadata is used in the current view; if turned off, both cultivated and non-cultivated records can be shown.
 - **Include cultivated records** — when enabled, cultivated records are allowed in the returned subset; when off, they are hidden.
 - **Keep only BIEN geovalid coordinates** — restricts the view to BIEN-flagged geovalid points and hides flagged/non-geovalid coordinates.
-- **Exclude citizen science and HumanObservation records** — when enabled, removes any occurrence rows whose derived `observation_category` is `Citizen science (iNaturalist)` or `Field observation (HumanObservation)` from the app sample before mapping. This gives a conservative view of specimen- and plot-based evidence only. **Caution**: the Darwin Core `HumanObservation` category encompasses not only crowdsourced observations but also expert naturalist field notes and other non-specimen field evidence. Turning this on removes all of them together.
+- **Exclude field observation and citizen science records (HumanObservation + iNaturalist)** — when enabled, removes any occurrence rows whose derived `observation_category` is `Citizen science (iNaturalist)` or `Field observation (HumanObservation)` from the app sample before mapping. This gives a conservative view of specimen- and plot-based evidence only. **Caution**: the Darwin Core `HumanObservation` category encompasses not only crowdsourced observations but also expert naturalist field notes and other non-specimen field evidence. Turning this on removes all of them together.
 
 These controls are useful because the “best” filtering choice depends on the study question. For example, conservation or native-range questions may prefer strict native filtering, while horticultural or broader occurrence reconnaissance may not.
 

@@ -73,7 +73,7 @@ The sidebar exposes biologically important settings:
 - **Use BIEN `is_cultivated` filter**
 - **When used, include cultivated records**
 - **Only geovalid coordinates**
-- **Exclude citizen science and HumanObservation records** — when enabled, the app removes rows whose derived `observation_category` is `Citizen science (iNaturalist)` or `Field observation (HumanObservation)` from the app sample before mapping. This is useful when you want a conservative view of specimen- and plot-based evidence only. **Important interpretation caveat**: the Darwin Core `HumanObservation` category includes not only citizen-science records but also expert field observations, informal survey notes, and other non-specimen field evidence. Enabling this toggle removes all of those categories together, not only crowdsourced records.
+- **Exclude field observation and citizen science records (HumanObservation + iNaturalist)** — when enabled, the app removes rows whose derived `observation_category` is `Citizen science (iNaturalist)` or `Field observation (HumanObservation)` from the app sample before mapping. This is useful when you want a conservative view of specimen- and plot-based evidence only. **Important interpretation caveat**: the Darwin Core `HumanObservation` category includes not only citizen-science records but also expert field observations, informal survey notes, and other non-specimen field evidence. Enabling this toggle removes all of those categories together, not only crowdsourced records.
 - occurrence and trait record caps
 - random sampling for displayed records
 - map-thinning behavior when there are many points
@@ -111,6 +111,13 @@ The main workflow in `app.R` is:
 5. Trait records are retrieved and summarized in both tabular and graphical form.
 6. Range products are queried and any downloaded shapefiles are loaded with `read_downloaded_range_sf()`.
 7. The app reports reconciliation details, QA losses, map status, and range status in the Overview and Reconciliation tabs.
+
+### 5a. Background count-prefetch behavior
+
+After a successful occurrence query, the app performs a short-budget background prefetch of BIEN count-only totals (`total` and `total_all`) so map and summary denominator text can populate quickly without forcing an extra click.
+
+- These prefetch count calls use conservative timeout caps and fail gracefully when BIEN is slow.
+- The manual **Load BIEN total counts and source mix (slower)** button remains available for users who also want the slower source-mix computation.
 
 ---
 

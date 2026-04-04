@@ -189,19 +189,41 @@ query_occurrence_randomized <- function(species_name, cultivated = FALSE, native
   )
 }
 
-query_occurrence_with_fallback <- function(species_name, input, occ_limit, occ_page_size, timeout_sec, connection_retry = FALSE) {
-  use_cultivated_filter <- if (is.null(input$use_cultivated_filter)) TRUE else isTRUE(input$use_cultivated_filter)
-  use_introduced_filter <- if (is.null(input$use_introduced_filter)) TRUE else isTRUE(input$use_introduced_filter)
-  include_cultivated <- if (use_cultivated_filter) isTRUE(input$include_cultivated) else TRUE
-  natives_only <- if (use_introduced_filter) {
-    if (is.null(input$natives_only)) TRUE else isTRUE(input$natives_only)
-  } else {
-    FALSE
-  }
-  only_geovalid <- if (is.null(input$only_geovalid)) TRUE else isTRUE(input$only_geovalid)
+resolve_filter_profile <- function(input) {
+  use_default_profile <- if (is.null(input$use_default_bien_filter_profile)) TRUE else isTRUE(input$use_default_bien_filter_profile)
 
-  fast_limit <- min(occ_limit, 2000)
-  fast_page_size <- min(occ_page_size, 500, fast_limit)
+  if (use_default_profile) {
+    return(list(
+      use_default_profile = TRUE,
+      use_introduced_filter = TRUE,
+      natives_only = TRUE,
+      use_cultivated_filter = TRUE,
+      include_cultivated = FALSE,
+      only_geovalid = TRUE,
+      exclude_human_observation_records = FALSE
+    ))
+  }
+
+  list(
+    use_default_profile = FALSE,
+    use_introduced_filter = if (is.null(input$use_introduced_filter)) TRUE else isTRUE(input$use_introduced_filter),
+    natives_only = if (is.null(input$natives_only)) TRUE else isTRUE(input$natives_only),
+    use_cultivated_filter = if (is.null(input$use_cultivated_filter)) TRUE else isTRUE(input$use_cultivated_filter),
+    include_cultivated = if (is.null(input$include_cultivated)) FALSE else isTRUE(input$include_cultivated),
+    only_geovalid = if (is.null(input$only_geovalid)) TRUE else isTRUE(input$only_geovalid),
+    exclude_human_observation_records = if (is.null(input$exclude_human_observation_records)) FALSE else isTRUE(input$exclude_human_observation_records)
+  )
+}
+
+query_occurrence_with_fallback <- function(species_name, input, occ_limit, occ_page_size, timeout_sec, connection_retry = FALSE) {
+  filter_cfg <- resolve_filter_profile(input)
+  include_cultivated <- if (filter_cfg$use_cultivated_filter) filter_cfg$include_cultivated else TRUE
+  natives_only <- if (filter_cfg$use_introduced_filter) filter_cfg$natives_only else FALSE
+  only_geovalid <- filter_cfg$only_geovalid
+
+  # Respect larger user-requested sample sizes while keeping an upper guardrail for server stability.
+  fast_limit <- min(occ_limit, 50000)
+  fast_page_size <- min(occ_page_size, 5000, fast_limit)
 
   # Try the user-requested interpretation first, then relax native-only and finally
   # geovalid constraints if needed so the app can still show some BIEN evidence.
@@ -1084,7 +1106,7 @@ ui <- fluidPage(
       checkboxInput("enable_taxon_autocorrect", "Suggest closest BIEN taxon spelling when no exact match", value = TRUE),
       uiOutput("spelling_suggestion_ui"),
       actionButton("run_query", "Query BIEN", class = "btn-primary"),
-      actionButton("retry_bien", "Retry BIEN connection (with backoff)", class = "btn-warning btn-sm"),
+      uiOutput("retry_bien_ui"),
       tags$script(HTML("$(document).on('keydown', '#species', function(e) { if (e.key === 'Enter') { $('#run_query').click(); return false; } });")),
       tags$div(
         style = "font-size:0.92em;color:#555;margin:6px 0 10px 0;",
@@ -1096,21 +1118,33 @@ ui <- fluidPage(
         tags$strong("Important: "),
         "If you change any of the filters below, click ", tags$code("Query BIEN"), " again to refresh the occurrence records and summaries."
       ),
-      checkboxInput("use_introduced_filter", "Use BIEN native vs introduced status (turn off to show records regardless of introduced status)", value = TRUE),
+      checkboxInput("use_default_bien_filter_profile", "Use BIEN conservative default filter profile (recommended)", value = TRUE),
       conditionalPanel(
-        condition = "input.use_introduced_filter == true",
-        checkboxInput("natives_only", "Keep native records only and hide introduced records", value = TRUE)
+        condition = "input.use_default_bien_filter_profile == false",
+        checkboxInput("use_introduced_filter", "Use BIEN native vs introduced status (turn off to show records regardless of introduced status)", value = TRUE),
+        conditionalPanel(
+          condition = "input.use_introduced_filter == true",
+          checkboxInput("natives_only", "Keep native records only and hide introduced records", value = TRUE)
+        ),
+        checkboxInput("use_cultivated_filter", "Use BIEN cultivated vs wild status (turn off to show both cultivated and non-cultivated records)", value = TRUE),
+        conditionalPanel(
+          condition = "input.use_cultivated_filter == true",
+          checkboxInput("include_cultivated", "Include cultivated records (turn off to hide them)", value = FALSE)
+        ),
+        checkboxInput("only_geovalid", "Keep only BIEN geovalid coordinates (hide flagged / non-geovalid points)", value = TRUE),
+        checkboxInput("exclude_human_observation_records", "Exclude field observation and citizen science records (HumanObservation + iNaturalist)", value = FALSE)
       ),
-      checkboxInput("use_cultivated_filter", "Use BIEN cultivated vs wild status (turn off to show both cultivated and non-cultivated records)", value = TRUE),
       conditionalPanel(
-        condition = "input.use_cultivated_filter == true",
-        checkboxInput("include_cultivated", "Include cultivated records (turn off to hide them)", value = FALSE)
+        condition = "input.use_default_bien_filter_profile == true",
+        tags$div(
+          style = "background:#e8f5e9;border:1px solid #b7dfb9;color:#1b5e20;padding:8px 10px;border-radius:6px;margin:8px 0 10px 0;font-size:0.92em;",
+          tags$strong("Default BIEN conservative profile active: "),
+          "native-only, cultivated excluded, geovalid-only coordinates, and all observation-source categories retained."
+        )
       ),
-      checkboxInput("only_geovalid", "Keep only BIEN geovalid coordinates (hide flagged / non-geovalid points)", value = TRUE),
-      checkboxInput("exclude_human_observation_records", "Exclude citizen science and HumanObservation records", value = FALSE),
       uiOutput("filter_selection_summary"),
       numericInput("occurrence_limit", "Occurrence records to keep in app sample", value = 1000, min = 200, max = 50000, step = 200),
-      numericInput("map_point_cap", "Max mapped occurrence points", value = 800, min = 100, max = 5000, step = 100),
+      numericInput("map_point_cap", "Max mapped occurrence points", value = 800, min = 100, max = 50000, step = 100),
       checkboxInput("randomize_occurrence_sample", "Allow randomized or balanced subsampling for the displayed app sample (turn off to keep the returned BIEN sample as-is)", value = TRUE),
       selectInput("map_sampling_method", "If too many occurrence records are available, balance the display using", choices = c("Balanced by datasource" = "datasource", "Balanced by observation type" = "observation_type", "Balanced by broader observation category" = "observation_category", "Random sample" = "random", "First returned" = "head"), selected = "datasource"),
       selectInput("map_color_by", "Color map points by", choices = c("Observation category" = "category", "Raw BIEN observation_type" = "type"), selected = "category"),
@@ -1435,10 +1469,11 @@ server <- function(input, output, session) {
     map_point_cap <- max(100, as.numeric(input$map_point_cap))
     trait_limit <- max(100, as.numeric(input$trait_limit))
     sample_random <- if (is.null(input$randomize_occurrence_sample)) TRUE else isTRUE(input$randomize_occurrence_sample)
+    filter_cfg <- resolve_filter_profile(input)
     map_sampling_method <- if (is.null(input$map_sampling_method)) "datasource" else input$map_sampling_method
     display_sampling_method <- if (sample_random) map_sampling_method else "head"
     occ_page_size <- min(1000, max(occ_limit, 500))
-    occ_fetch_limit <- min(if (identical(display_sampling_method, "head")) occ_limit else max(occ_limit * 2, 1000), 2000)
+    occ_fetch_limit <- min(if (identical(display_sampling_method, "head")) occ_limit else max(occ_limit * 2, 1000), 50000)
     trait_fetch_limit <- min(trait_limit, 1000)
     range_dir <- file.path(tempdir(), "bien_ranges_cache", gsub("\\s+", "_", species_name))
     dir.create(range_dir, recursive = TRUE, showWarnings = FALSE)
@@ -1452,12 +1487,13 @@ server <- function(input, output, session) {
       trait_limit,
       sample_random,
       map_sampling_method,
-      if (is.null(input$use_cultivated_filter)) TRUE else isTRUE(input$use_cultivated_filter),
-      if (is.null(input$include_cultivated)) FALSE else isTRUE(input$include_cultivated),
-      if (is.null(input$use_introduced_filter)) TRUE else isTRUE(input$use_introduced_filter),
-      if (is.null(input$natives_only)) TRUE else isTRUE(input$natives_only),
-      if (is.null(input$only_geovalid)) TRUE else isTRUE(input$only_geovalid),
-      if (is.null(input$exclude_human_observation_records)) FALSE else isTRUE(input$exclude_human_observation_records),
+      filter_cfg$use_default_profile,
+      filter_cfg$use_cultivated_filter,
+      filter_cfg$include_cultivated,
+      filter_cfg$use_introduced_filter,
+      filter_cfg$natives_only,
+      filter_cfg$only_geovalid,
+      filter_cfg$exclude_human_observation_records,
       sep = "||"
     )
 
@@ -1487,7 +1523,7 @@ server <- function(input, output, session) {
 
       if (is.data.frame(occ)) {
         occ <- categorize_observation_records(occ)
-        if (isTRUE(input$exclude_human_observation_records)) {
+        if (isTRUE(filter_cfg$exclude_human_observation_records)) {
           occ <- occ %>%
             filter(!observation_category %in% c("Citizen science (iNaturalist)", "Field observation (HumanObservation)"))
         }
@@ -1534,11 +1570,13 @@ server <- function(input, output, session) {
         occ_fetch_limit = occ_limit_used,
         trait_fetch_limit = trait_fetch_limit,
         occ_strategy = occ_strategy,
-        use_cultivated_filter = if (is.null(input$use_cultivated_filter)) TRUE else isTRUE(input$use_cultivated_filter),
-        use_introduced_filter = if (is.null(input$use_introduced_filter)) TRUE else isTRUE(input$use_introduced_filter),
-        include_cultivated = if (is.null(input$include_cultivated)) FALSE else isTRUE(input$include_cultivated),
-        natives_only = if (is.null(input$natives_only)) TRUE else isTRUE(input$natives_only),
-        exclude_human_observation_records = if (is.null(input$exclude_human_observation_records)) FALSE else isTRUE(input$exclude_human_observation_records),
+        use_default_filter_profile = filter_cfg$use_default_profile,
+        use_cultivated_filter = filter_cfg$use_cultivated_filter,
+        use_introduced_filter = filter_cfg$use_introduced_filter,
+        include_cultivated = filter_cfg$include_cultivated,
+        natives_only = filter_cfg$natives_only,
+        only_geovalid = filter_cfg$only_geovalid,
+        exclude_human_observation_records = filter_cfg$exclude_human_observation_records,
         query_cache_key = cache_key,
         query_elapsed_sec = round(as.numeric(difftime(Sys.time(), query_started, units = "secs")), 1),
         cache_hit = FALSE,
@@ -1590,6 +1628,19 @@ server <- function(input, output, session) {
     )
   })
 
+  output$retry_bien_ui <- renderUI({
+    if ((is.null(input$run_query) || input$run_query < 1) && (is.null(input$retry_bien) || input$retry_bien < 1)) {
+      return(NULL)
+    }
+
+    res <- bien_results()
+    if (is.null(res) || !is_bien_connection_error(res$query_errors)) {
+      return(NULL)
+    }
+
+    actionButton("retry_bien", "Retry BIEN connection (with backoff)", class = "btn-warning btn-sm")
+  })
+
   observeEvent(bien_results(), {
     updateTabsetPanel(session, "main_tabs", selected = "Occurrence Map")
   }, ignoreInit = TRUE)
@@ -1600,6 +1651,10 @@ server <- function(input, output, session) {
       species_for_code <- "Pinus ponderosa"
     }
     species_for_code <- normalize_species_name(species_for_code)
+    filter_cfg <- resolve_filter_profile(input)
+    active_cultivated <- if (filter_cfg$use_cultivated_filter) filter_cfg$include_cultivated else TRUE
+    active_natives_only <- if (filter_cfg$use_introduced_filter) filter_cfg$natives_only else FALSE
+    active_only_geovalid <- filter_cfg$only_geovalid
 
     paste(
       "# BIEN package reproducible workflow: liberal + conservative occurrence views",
@@ -1613,6 +1668,33 @@ server <- function(input, output, session) {
       "library(htmltools)",
       "",
       paste0('species_name <- "', species_for_code, '"'),
+      "",
+      "# 0) Current app query profile (active in this session)",
+      paste0("# use_default_bien_filter_profile = ", tolower(as.character(filter_cfg$use_default_profile))),
+      paste0("# use_introduced_filter = ", tolower(as.character(filter_cfg$use_introduced_filter))),
+      paste0("# natives_only = ", tolower(as.character(filter_cfg$natives_only))),
+      paste0("# use_cultivated_filter = ", tolower(as.character(filter_cfg$use_cultivated_filter))),
+      paste0("# include_cultivated = ", tolower(as.character(filter_cfg$include_cultivated))),
+      paste0("# only_geovalid = ", tolower(as.character(filter_cfg$only_geovalid))),
+      paste0("# exclude_human_observation_records = ", tolower(as.character(filter_cfg$exclude_human_observation_records))),
+      "",
+      "# Active BIEN occurrence query equivalent to current app filter profile",
+      "occ_active <- BIEN_occurrence_species(",
+      "  species = species_name,",
+      paste0("  cultivated = ", tolower(as.character(active_cultivated)), ","),
+      paste0("  natives.only = ", tolower(as.character(active_natives_only)), ","),
+      paste0("  only.geovalid = ", tolower(as.character(active_only_geovalid)), ","),
+      "  all.taxonomy = TRUE,",
+      "  native.status = TRUE,",
+      "  observation.type = TRUE,",
+      "  political.boundaries = FALSE,",
+      "  collection.info = FALSE",
+      ")",
+      if (isTRUE(filter_cfg$exclude_human_observation_records)) {
+        "occ_active <- occ_active %>% categorize_observation_records() %>% dplyr::filter(!observation_category %in% c('Citizen science (iNaturalist)', 'Field observation (HumanObservation)'))"
+      } else {
+        "# No post-query exclusion of citizen science / HumanObservation rows is active."
+      },
       "",
       "# 1) Liberal occurrence query (includes native + introduced, cultivated + uncultivated,",
       "#    and both geovalid and non-geovalid coordinates)",
@@ -1683,11 +1765,11 @@ server <- function(input, output, session) {
       "  ))",
       "",
       "  df$observation_category <- dplyr::case_when(",
-      "    str_detect(combined_txt, 'inaturalist') ~ 'Citizen science (iNaturalist)',",
-      "    str_detect(combined_txt, 'trait|measurement') ~ 'Trait measurement',",
-      "    str_detect(combined_txt, 'plot|survey|inventory|monitoring') ~ 'Plot / survey',",
       "    str_detect(combined_txt, 'specimen|herb|preserved specimen|preservedspecimen|museum') ~ 'Specimen / herbarium',",
-      "    str_detect(combined_txt, 'human observation|human_observation|observation') & str_detect(combined_txt, 'gbif') ~ 'Citizen science / GBIF observation',",
+      "    str_detect(combined_txt, '\\bplot\\b|\\bsurvey\\b|\\binventory\\b|\\bmonitoring\\b') ~ 'Plot / survey',",
+      "    str_detect(combined_txt, 'inaturalist') ~ 'Citizen science (iNaturalist)',",
+      "    (str_detect(tolower(ifelse(is.na(basis_txt), '', basis_txt)), 'humanobservation|human observation') |",
+      "      (str_detect(combined_txt, '\\bhuman\\s+observation\\b|\\bhuman_observation\\b') & !str_detect(combined_txt, 'specimen|museum|herb'))) ~ 'Field observation (HumanObservation)',",
       "    str_detect(combined_txt, 'gbif') ~ 'GBIF / other aggregator',",
       "    TRUE ~ 'Other / unknown'",
       "  )",
@@ -2100,20 +2182,20 @@ server <- function(input, output, session) {
       return(NULL)
     }
 
-    use_cultivated_filter <- if (is.null(input$use_cultivated_filter)) TRUE else isTRUE(input$use_cultivated_filter)
-    use_introduced_filter <- if (is.null(input$use_introduced_filter)) TRUE else isTRUE(input$use_introduced_filter)
-    count_include_cultivated <- if (use_cultivated_filter) isTRUE(input$include_cultivated) else TRUE
+    use_cultivated_filter <- isTRUE(res$use_cultivated_filter)
+    use_introduced_filter <- isTRUE(res$use_introduced_filter)
+    count_include_cultivated <- if (use_cultivated_filter) isTRUE(res$include_cultivated) else TRUE
     count_natives_only <- if (identical(res$occ_strategy, "fallback_relaxed_native") || identical(res$occ_strategy, "fallback_relaxed_geo")) {
       FALSE
     } else if (use_introduced_filter) {
-      if (is.null(input$natives_only)) TRUE else isTRUE(input$natives_only)
+      isTRUE(res$natives_only)
     } else {
       FALSE
     }
     count_only_geovalid <- if (identical(res$occ_strategy, "fallback_relaxed_geo")) {
       FALSE
     } else {
-      if (is.null(input$only_geovalid)) TRUE else isTRUE(input$only_geovalid)
+      isTRUE(res$only_geovalid)
     }
 
     occ_total_info <- count_occurrence_records(
@@ -2154,20 +2236,20 @@ server <- function(input, output, session) {
     }
 
     withProgress(message = paste("Querying BIEN summary counts for", res$species), detail = "Summary statistics: estimating total matches and source mix", value = 0, {
-      use_cultivated_filter <- if (is.null(input$use_cultivated_filter)) TRUE else isTRUE(input$use_cultivated_filter)
-      use_introduced_filter <- if (is.null(input$use_introduced_filter)) TRUE else isTRUE(input$use_introduced_filter)
-      count_include_cultivated <- if (use_cultivated_filter) isTRUE(input$include_cultivated) else TRUE
+      use_cultivated_filter <- isTRUE(res$use_cultivated_filter)
+      use_introduced_filter <- isTRUE(res$use_introduced_filter)
+      count_include_cultivated <- if (use_cultivated_filter) isTRUE(res$include_cultivated) else TRUE
       count_natives_only <- if (identical(res$occ_strategy, "fallback_relaxed_native") || identical(res$occ_strategy, "fallback_relaxed_geo")) {
         FALSE
       } else if (use_introduced_filter) {
-        if (is.null(input$natives_only)) TRUE else isTRUE(input$natives_only)
+        isTRUE(res$natives_only)
       } else {
         FALSE
       }
       count_only_geovalid <- if (identical(res$occ_strategy, "fallback_relaxed_geo")) {
         FALSE
       } else {
-        if (is.null(input$only_geovalid)) TRUE else isTRUE(input$only_geovalid)
+        isTRUE(res$only_geovalid)
       }
 
       incProgress(0.4, detail = "Counting total BIEN matches")
@@ -2393,7 +2475,7 @@ server <- function(input, output, session) {
         format(mappable_n, big.mark = ",", scientific = FALSE, trim = TRUE),
         " / ",
         format(occ_total_all_available, big.mark = ",", scientific = FALSE, trim = TRUE),
-        ")"
+        "; sampled subset of all BIEN observations)"
       )
     } else if (!is.na(mapped_pct_of_returned)) {
       paste0(
@@ -2445,7 +2527,8 @@ server <- function(input, output, session) {
       "<br><strong>Mapped-point cap requested:</strong> ", res$map_point_cap,
       "<br><strong>Mapped-point native / introduced status:</strong> ", introduced_line,
       "<br><strong>Mapped-point cultivated status:</strong> ", cultivated_line,
-      "<br><strong>Exclude citizen science/HumanObservation records:</strong> ", ifelse(isTRUE(res$exclude_human_observation_records), "yes", "no"),
+      "<br><strong>Exclude field observation + citizen science records (HumanObservation + iNaturalist):</strong> ", ifelse(isTRUE(res$exclude_human_observation_records), "yes", "no"),
+      "<br><strong>Use BIEN default conservative filter profile:</strong> ", ifelse(isTRUE(res$use_default_filter_profile), "yes", "no"),
       "<br><strong>Coordinate / geovalid summary:</strong> ", geovalid_line,
       "<br><strong>Overview map status:</strong> ", map_status,
       "<br><strong>Observation records after QA:</strong> ", res$occurrences_prepared$original_kept,
@@ -2504,7 +2587,7 @@ server <- function(input, output, session) {
         format(mappable_n, big.mark = ",", scientific = FALSE, trim = TRUE),
         " / ",
         format(occ_total_all_available, big.mark = ",", scientific = FALSE, trim = TRUE),
-        ")"
+        "; sampled subset of all BIEN observations)"
       )
     } else if (!is.null(summary_bundle) && !is.null(summary_bundle$total_all_note) && nzchar(summary_bundle$total_all_note)) {
       paste0(
@@ -2705,36 +2788,35 @@ server <- function(input, output, session) {
   # Summarize the currently selected biological filters in plain language so users
   # can see immediately what kind of occurrence evidence is being requested.
   output$filter_selection_summary <- renderUI({
-    default_mode <- isTRUE(input$use_introduced_filter) && isTRUE(input$natives_only) &&
-      isTRUE(input$use_cultivated_filter) && !isTRUE(input$include_cultivated) &&
-      isTRUE(input$only_geovalid) && !isTRUE(input$exclude_human_observation_records)
+    filter_cfg <- resolve_filter_profile(input)
+    default_mode <- isTRUE(filter_cfg$use_default_profile)
 
-    intro_txt <- if (isTRUE(input$use_introduced_filter) && isTRUE(input$natives_only)) {
+    intro_txt <- if (isTRUE(filter_cfg$use_introduced_filter) && isTRUE(filter_cfg$natives_only)) {
       "BIEN-classified native / not introduced records only"
-    } else if (isTRUE(input$use_introduced_filter)) {
+    } else if (isTRUE(filter_cfg$use_introduced_filter)) {
       "records shown with BIEN native / introduced status available"
     } else {
       "records shown regardless of BIEN native / introduced status"
     }
 
-    cultivated_txt <- if (isTRUE(input$use_cultivated_filter) && !isTRUE(input$include_cultivated)) {
+    cultivated_txt <- if (isTRUE(filter_cfg$use_cultivated_filter) && !isTRUE(filter_cfg$include_cultivated)) {
       "cultivated records hidden"
-    } else if (isTRUE(input$use_cultivated_filter) && isTRUE(input$include_cultivated)) {
+    } else if (isTRUE(filter_cfg$use_cultivated_filter) && isTRUE(filter_cfg$include_cultivated)) {
       "cultivated and non-cultivated records both shown"
     } else {
       "records shown regardless of BIEN cultivated status"
     }
 
-    geo_txt <- if (isTRUE(input$only_geovalid)) {
+    geo_txt <- if (isTRUE(filter_cfg$only_geovalid)) {
       "only BIEN geovalid coordinates shown"
     } else {
       "both geovalid and flagged / non-geovalid coordinates shown"
     }
 
-    obs_source_txt <- if (isTRUE(input$exclude_human_observation_records)) {
-      "citizen science and HumanObservation records excluded"
+    obs_source_txt <- if (isTRUE(filter_cfg$exclude_human_observation_records)) {
+      "field observation and citizen science records excluded (HumanObservation + iNaturalist)"
     } else {
-      "all observation-source categories retained (including citizen science / HumanObservation)"
+      "all observation-source categories retained (including field observation / citizen science)"
     }
 
     tags$div(
