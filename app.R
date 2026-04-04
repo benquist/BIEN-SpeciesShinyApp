@@ -2121,7 +2121,7 @@ server <- function(input, output, session) {
       cultivated = count_include_cultivated,
       natives_only = count_natives_only,
       only_geovalid = count_only_geovalid,
-      timeout_sec = res$timeout_sec
+      timeout_sec = min(res$timeout_sec, 20)
     )
 
     occ_total_all_info <- count_occurrence_records(
@@ -2129,7 +2129,7 @@ server <- function(input, output, session) {
       cultivated = TRUE,
       natives_only = FALSE,
       only_geovalid = FALSE,
-      timeout_sec = max(res$timeout_sec, 60)
+      timeout_sec = min(res$timeout_sec, 20)
     )
 
     out <- list(
@@ -2146,7 +2146,6 @@ server <- function(input, output, session) {
   summary_results <- eventReactive(input$load_summary_counts, {
     res <- bien_results()
     req(res)
-    req(!is.null(input$main_tabs), identical(input$main_tabs, "Summary Statistics"))
 
     cache_key <- paste0(res$query_cache_key, "||summary")
     cached <- get_cached_result(summary_cache, cache_key)
@@ -2192,7 +2191,7 @@ server <- function(input, output, session) {
           cultivated = TRUE,
           natives_only = FALSE,
           only_geovalid = FALSE,
-          timeout_sec = max(res$timeout_sec, 60)
+          timeout_sec = min(res$timeout_sec, 30)
         )
       }
 

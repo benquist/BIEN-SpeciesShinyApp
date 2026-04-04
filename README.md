@@ -139,6 +139,7 @@ The sidebar includes controls to tailor the biological interpretation of returne
 - **Use BIEN cultivated vs wild status** — if left on, BIEN cultivated metadata is used in the current view; if turned off, both cultivated and non-cultivated records can be shown.
 - **Include cultivated records** — when enabled, cultivated records are allowed in the returned subset; when off, they are hidden.
 - **Keep only BIEN geovalid coordinates** — restricts the view to BIEN-flagged geovalid points and hides flagged/non-geovalid coordinates.
+- **Exclude citizen science and HumanObservation records** — when enabled, removes any occurrence rows whose derived `observation_category` is `Citizen science (iNaturalist)` or `Field observation (HumanObservation)` from the app sample before mapping. This gives a conservative view of specimen- and plot-based evidence only. **Caution**: the Darwin Core `HumanObservation` category encompasses not only crowdsourced observations but also expert naturalist field notes and other non-specimen field evidence. Turning this on removes all of them together.
 
 These controls are useful because the “best” filtering choice depends on the study question. For example, conservation or native-range questions may prefer strict native filtering, while horticultural or broader occurrence reconnaissance may not.
 

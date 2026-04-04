@@ -1,6 +1,6 @@
 # BIEN Species Shiny App — Code and Workflow Documentation
 
-This document explains the R/Shiny workflow in `BIEN Shiny App/app.R` in a form intended to be readable by biodiversity scientists, ecologists, taxonomists, and documentation/review agents.
+This document explains the R/Shiny workflow in `BIEN-SpeciesShinyApp/app.R` in a form intended to be readable by biodiversity scientists, ecologists, taxonomists, and documentation/review agents.
 
 ---
 
@@ -73,6 +73,7 @@ The sidebar exposes biologically important settings:
 - **Use BIEN `is_cultivated` filter**
 - **When used, include cultivated records**
 - **Only geovalid coordinates**
+- **Exclude citizen science and HumanObservation records** — when enabled, the app removes rows whose derived `observation_category` is `Citizen science (iNaturalist)` or `Field observation (HumanObservation)` from the app sample before mapping. This is useful when you want a conservative view of specimen- and plot-based evidence only. **Important interpretation caveat**: the Darwin Core `HumanObservation` category includes not only citizen-science records but also expert field observations, informal survey notes, and other non-specimen field evidence. Enabling this toggle removes all of those categories together, not only crowdsourced records.
 - occurrence and trait record caps
 - random sampling for displayed records
 - map-thinning behavior when there are many points
@@ -187,7 +188,7 @@ Range layers are supporting artifacts and must be interpreted alongside occurren
 
 ### Main run command
 ```bash
-cd "/Users/brianjenquist/VSCode/BIEN Shiny App"
+cd "/Users/brianjenquist/VSCode/BIEN-SpeciesShinyApp"
 /usr/local/bin/Rscript -e 'shiny::runApp(".")'
 ```
 
