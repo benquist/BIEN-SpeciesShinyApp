@@ -344,34 +344,28 @@ count_mappable_occurrences_for_species <- function(species_name, cultivated = FA
 }
 
 find_lucky_species_with_mappable_points <- function(input, min_mappable_points = 30, max_attempts = 3, timeout_sec = 12) {
-  filter_cfg <- resolve_filter_profile(input)
-  include_cultivated <- if (filter_cfg$use_cultivated_filter) filter_cfg$include_cultivated else TRUE
-  natives_only <- if (filter_cfg$use_introduced_filter) filter_cfg$natives_only else FALSE
-  only_geovalid <- filter_cfg$only_geovalid
-  check_timeout <- min(timeout_sec, 4)
+  # Use a curated pool to keep Lucky mode responsive even when BIEN backend calls are slow.
+  lucky_pool <- c(
+    "Acer negundo", "Quercus alba", "Pinus ponderosa", "Picea glauca", "Betula papyrifera",
+    "Populus tremuloides", "Salix nigra", "Artemisia tridentata", "Eschscholzia californica", "Lupinus arboreus",
+    "Ambrosia artemisiifolia", "Solidago canadensis", "Asclepias syriaca", "Helianthus annuus", "Taraxacum officinale",
+    "Trifolium repens", "Poa pratensis", "Festuca arundinacea", "Muhlenbergia rigens", "Bouteloua gracilis",
+    "Opuntia ficus-indica", "Carnegiea gigantea", "Larrea tridentata", "Prosopis glandulosa", "Juniperus virginiana",
+    "Sequoia sempervirens", "Tsuga heterophylla", "Abies concolor", "Vaccinium corymbosum", "Prunus serotina"
+  )
 
-  for (i in seq_len(max_attempts)) {
-    candidate <- get_random_bien_species_candidate(timeout_sec = min(timeout_sec, 2))
-    if (is.null(candidate)) {
-      next
-    }
-
-    mappable_n <- count_mappable_occurrences_for_species(
-      species_name = candidate,
-      cultivated = include_cultivated,
-      natives_only = natives_only,
-      only_geovalid = only_geovalid,
-      timeout_sec = check_timeout
-    )
-
-    if (is.na(mappable_n) || mappable_n < min_mappable_points) {
-      next
-    }
-
-    return(list(status = "ok", species = candidate, mappable_n = as.integer(mappable_n), attempts = i))
+  current_species <- normalize_species_name(if (is.null(input$species)) "" else as.character(input$species))
+  available <- unique(lucky_pool)
+  if (nzchar(current_species)) {
+    available <- available[tolower(available) != tolower(current_species)]
   }
 
-  list(status = "not_found", species = NULL, mappable_n = NA_integer_, attempts = max_attempts)
+  if (length(available) == 0) {
+    return(list(status = "not_found", species = NULL, mappable_n = NA_integer_, attempts = 0, precheck = "none"))
+  }
+
+  chosen <- sample(available, size = 1)
+  list(status = "ok", species = chosen, mappable_n = NA_integer_, attempts = 1, precheck = "curated_pool")
 }
 
 find_first_col <- function(df, candidates) {
@@ -1558,8 +1552,8 @@ server <- function(input, output, session) {
   }, ignoreInit = TRUE)
 
   observeEvent(input$feeling_lucky_species, {
-    withProgress(message = "Finding a lucky BIEN species", detail = "Sampling random species with >= 30 mappable points", value = 0, {
-      incProgress(0.2, detail = "Checking random BIEN plant species candidates")
+    withProgress(message = "Finding a lucky BIEN species", detail = "Selecting from curated BIEN species pool", value = 0, {
+      incProgress(0.2, detail = "Picking a random species")
       lucky <- find_lucky_species_with_mappable_points(
         input = input,
         min_mappable_points = 30,
@@ -1583,7 +1577,7 @@ server <- function(input, output, session) {
       updateNumericInput(session, "map_point_cap", value = min(1000, max(100, as.numeric(input$map_point_cap))))
       updateTextInput(session, "species", value = lucky$species)
       showNotification(
-        paste0("Lucky species: ", lucky$species, " (", lucky$mappable_n, " mappable points in pre-check). Running a fast first-pass query..."),
+        paste0("Lucky species: ", lucky$species, ". Running a fast first-pass query..."),
         type = "message",
         duration = 6
       )
