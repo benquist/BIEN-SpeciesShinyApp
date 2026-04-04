@@ -1002,8 +1002,18 @@ ui <- fluidPage(
         border-color: var(--bien-green-deep);
         color: #3a6520;
       }
+      .nav-tabs {
+        display: flex;
+        flex-wrap: wrap;
+        border-bottom: 1px solid #ddd;
+      }
+      .nav-tabs > li {
+        flex: 0 0 auto;
+      }
       .nav-tabs > li > a {
         color: #2f5f86;
+        padding: 8px 12px;
+        font-size: 0.95em;
       }
       .nav-tabs > li.active > a,
       .nav-tabs > li.active > a:focus,
