@@ -341,15 +341,15 @@ count_mappable_occurrences_for_species <- function(species_name, cultivated = FA
   suppressWarnings(as.numeric(out[[count_col]][1]))
 }
 
-find_lucky_species_with_mappable_points <- function(input, min_mappable_points = 30, max_attempts = 6, timeout_sec = 20) {
+find_lucky_species_with_mappable_points <- function(input, min_mappable_points = 30, max_attempts = 3, timeout_sec = 12) {
   filter_cfg <- resolve_filter_profile(input)
   include_cultivated <- if (filter_cfg$use_cultivated_filter) filter_cfg$include_cultivated else TRUE
   natives_only <- if (filter_cfg$use_introduced_filter) filter_cfg$natives_only else FALSE
   only_geovalid <- filter_cfg$only_geovalid
-  check_timeout <- min(timeout_sec, 8)
+  check_timeout <- min(timeout_sec, 4)
 
   for (i in seq_len(max_attempts)) {
-    candidate <- get_random_bien_species_candidate(timeout_sec = min(timeout_sec, 4))
+    candidate <- get_random_bien_species_candidate(timeout_sec = min(timeout_sec, 2))
     if (is.null(candidate)) {
       next
     }
@@ -1560,8 +1560,8 @@ server <- function(input, output, session) {
       lucky <- find_lucky_species_with_mappable_points(
         input = input,
         min_mappable_points = 30,
-        max_attempts = 6,
-        timeout_sec = min(20, max(10, as.numeric(input$query_timeout)))
+        max_attempts = 3,
+        timeout_sec = min(12, max(8, as.numeric(input$query_timeout)))
       )
 
       if (!identical(lucky$status, "ok") || is.null(lucky$species)) {
@@ -1574,9 +1574,13 @@ server <- function(input, output, session) {
       }
 
       incProgress(0.8, detail = paste("Selected", lucky$species, "- updating query"))
+      # Keep Lucky mode responsive even if the user previously requested very large samples.
+      updateCheckboxInput(session, "fast_large_species_mode", value = TRUE)
+      updateNumericInput(session, "occurrence_limit", value = min(2000, max(200, as.numeric(input$occurrence_limit))))
+      updateNumericInput(session, "map_point_cap", value = min(1000, max(100, as.numeric(input$map_point_cap))))
       updateTextInput(session, "species", value = lucky$species)
       showNotification(
-        paste0("Lucky species: ", lucky$species, " (", lucky$mappable_n, " mappable points in pre-check). Running BIEN query..."),
+        paste0("Lucky species: ", lucky$species, " (", lucky$mappable_n, " mappable points in pre-check). Running a fast first-pass query..."),
         type = "message",
         duration = 6
       )
