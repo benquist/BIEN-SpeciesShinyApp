@@ -50,3 +50,10 @@
 - Requested outcomes: Verify prompt log, Rmd/package applicability, and git push status for BIEN repo.
 - Files changed: agents/prompt_log.md
 - Completed by: GitHub Copilot
+
+- Date: 2026-04-04
+- Prompt summary: User requested Lucky-picked species to query all BIEN records instead of plot-only.
+- Requested outcomes: Ensure Lucky disables plot-only filtering so random species query behaves like normal BIEN query scope.
+- Result: Lucky now forces only_plot_observations = FALSE before query; code pushed. shinyapps deploy currently blocked by transient HTTP 409 task lock.
+- Files changed: app.R; rsconnect/shinyapps.io/benquist/bien-species-shinyapp.dcf; agents/prompt_log.md
+- Completed by: GitHub Copilot
