@@ -1280,9 +1280,18 @@ ui <- fluidPage(
           br(),
           tags$p(
             style = "color:#555;max-width:900px;",
-            "This script shows a direct BIEN-package query for occurrence records and trait records for the current species with no biological filters applied."
+            "This script shows two occurrence-query modes (liberal and conservative default ecological view), two corresponding maps, and trait summary code for the current species."
           ),
           verbatimTextOutput("bien_query_code")
+        ),
+        tabPanel(
+          "Species External Links",
+          br(),
+          tags$p(
+            style = "color:#555;max-width:900px;",
+            "Use these links to open species pages in external reference resources. Links are generated from the species currently entered in the app."
+          ),
+          uiOutput("species_external_links")
         )
       ),
       width = 9
@@ -1439,23 +1448,43 @@ server <- function(input, output, session) {
     species_for_code <- normalize_species_name(species_for_code)
 
     paste(
-      "# BIEN package reproducible workflow: occurrences + summaries + trait plots",
-      "# No biological filters applied (introduced/native, cultivated, geovalid are unconstrained).",
+      "# BIEN package reproducible workflow: liberal + conservative occurrence views",
+      "# This script creates two occurrence pulls and two maps for direct comparison.",
       "",
       "library(BIEN)",
       "library(dplyr)",
       "library(stringr)",
       "library(leaflet)",
       "library(ggplot2)",
+      "library(htmltools)",
       "",
       paste0('species_name <- "', species_for_code, '"'),
       "",
-      "# 1) Occurrence records used for mapping (no filters applied)",
+      "# 1) Liberal occurrence query (includes native + introduced, cultivated + uncultivated,",
+      "#    and both geovalid and non-geovalid coordinates)",
       "occ_all <- BIEN_occurrence_species(",
       "  species = species_name,",
       "  cultivated = TRUE,",
       "  natives.only = FALSE,",
       "  only.geovalid = FALSE,",
+      "  all.taxonomy = TRUE,",
+      "  native.status = TRUE,",
+      "  observation.type = TRUE,",
+      "  political.boundaries = FALSE,",
+      "  collection.info = FALSE",
+      ")",
+      "",
+      "# Alias for readability in downstream map code",
+      "occ_liberal <- occ_all",
+      "",
+      "# 1b) Conservative occurrence query (Shiny default ecological screening view)",
+      "# Showing BIEN-classified native / not introduced records only; cultivated records hidden;",
+      "# and only BIEN geovalid coordinates shown.",
+      "occ_conservative <- BIEN_occurrence_species(",
+      "  species = species_name,",
+      "  cultivated = FALSE,",
+      "  natives.only = TRUE,",
+      "  only.geovalid = TRUE,",
       "  all.taxonomy = TRUE,",
       "  native.status = TRUE,",
       "  observation.type = TRUE,",
@@ -1646,9 +1675,14 @@ server <- function(input, output, session) {
       "print(occ_summary$observation_category_counts)",
       "head(occ_summary$source_mix)",
       "",
-      "# 5) Map occurrence points (similar style to app map)",
-      "if (nrow(occ_mappable) > 0) {",
-      "  color_vals <- as.character(occ_mappable$observation_category)",
+      "# 5) Mapping helper used for both liberal and conservative maps",
+      "make_occ_map <- function(df_map, map_title) {",
+      "  if (nrow(df_map) == 0) {",
+      "    return(leaflet() %>% addProviderTiles(providers$CartoDB.Positron) %>%",
+      "      addControl(html = paste0('<strong>', htmlEscape(map_title), '</strong><br/>No mappable coordinates returned.'), position = 'topright'))",
+      "  }",
+      "",
+      "  color_vals <- as.character(df_map$observation_category)",
       "  color_vals[is.na(color_vals) | color_vals == ''] <- 'Other / unknown'",
       "  legend_vals <- sort(unique(color_vals))",
       "",
@@ -1657,7 +1691,7 @@ server <- function(input, output, session) {
       "    domain = legend_vals",
       "  )",
       "",
-      "  leaflet(occ_mappable) %>%",
+      "  leaflet(df_map) %>%",
       "    addProviderTiles(providers$CartoDB.Positron) %>%",
       "    addCircleMarkers(",
       "      lng = ~lon_num,",
@@ -1668,10 +1702,38 @@ server <- function(input, output, session) {
       "      fillColor = ~pal(observation_category),",
       "      popup = ~paste0(scrubbed_species_binomial, '<br>', observation_category)",
       "    ) %>%",
-      "    addLegend('topright', pal = pal, values = ~observation_category, title = 'Observation category', opacity = 0.9)",
-      "} else {",
-      "  message('No mappable coordinates returned for this query.')",
+      "    addLegend('topright', pal = pal, values = ~observation_category, title = 'Observation category', opacity = 0.9) %>%",
+      "    addControl(html = paste0('<strong>', htmlEscape(map_title), '</strong>'), position = 'topright')",
       "}",
+      "",
+      "# Build liberal map",
+      "occ_liberal_summary <- categorize_observation_records(occ_liberal)",
+      "occ_liberal_map <- occ_liberal_summary",
+      "if (has_coords) occ_liberal_map <- occ_liberal_summary %>% filter(coord_valid)",
+      "map_liberal <- make_occ_map(occ_liberal_map, 'Liberal BIEN occurrence view')",
+      "",
+      "# Build conservative map",
+      "occ_conservative_summary <- categorize_observation_records(occ_conservative)",
+      "lat_col_cons <- find_first_col(occ_conservative_summary, c('latitude', 'lat', 'decimalLatitude', 'decimal_latitude'))",
+      "lon_col_cons <- find_first_col(occ_conservative_summary, c('longitude', 'lon', 'decimalLongitude', 'decimal_longitude'))",
+      "if (!is.null(lat_col_cons) && !is.null(lon_col_cons)) {",
+      "  occ_conservative_map <- occ_conservative_summary %>%",
+      "    mutate(",
+      "      lat_num = suppressWarnings(as.numeric(.data[[lat_col_cons]])),",
+      "      lon_num = suppressWarnings(as.numeric(.data[[lon_col_cons]])),",
+      "      coord_valid = !is.na(lat_num) & !is.na(lon_num) & lat_num >= -90 & lat_num <= 90 & lon_num >= -180 & lon_num <= 180",
+      "    ) %>% filter(coord_valid)",
+      "} else {",
+      "  occ_conservative_map <- occ_conservative_summary[0, , drop = FALSE]",
+      "}",
+      "map_conservative <- make_occ_map(",
+      "  occ_conservative_map,",
+      "  'Conservative BIEN occurrence view: native/not introduced only; cultivated hidden; geovalid only'",
+      ")",
+      "",
+      "# Print both maps in sequence",
+      "map_liberal",
+      "map_conservative",
       "",
       "# 6) Trait summary table + plots (mirrors Trait Summary / Trait Graphics tabs)",
       "trait_vis <- prepare_trait_visual_data(traits_all)",
@@ -1707,10 +1769,64 @@ server <- function(input, output, session) {
       "",
       "# Inspect base outputs",
       "nrow(occ_all)",
+      "nrow(occ_conservative)",
       "nrow(traits_all)",
       "head(occ_all)",
+      "head(occ_conservative)",
       "head(traits_all)",
       sep = "\n"
+    )
+  })
+
+  output$species_external_links <- renderUI({
+    species_input <- str_squish(input$species)
+    species_name <- if (nzchar(species_input)) normalize_species_name(species_input) else "Pinus ponderosa"
+    species_slug <- gsub("\\s+", "_", species_name)
+    species_query <- utils::URLencode(species_name, reserved = TRUE)
+
+    wikipedia_url <- paste0("https://en.wikipedia.org/wiki/", species_slug)
+    powo_url <- if (identical(species_name, "Pinus ponderosa")) {
+      "https://powo.science.kew.org/taxon/urn:lsid:ipni.org:names:77170930-1"
+    } else {
+      paste0("https://powo.science.kew.org/results?q=", species_query)
+    }
+    mbg_url <- if (identical(species_name, "Pinus ponderosa")) {
+      "https://www.missouribotanicalgarden.org/PlantFinder/PlantFinderDetails.aspx?taxonid=285000"
+    } else {
+      paste0("https://www.missouribotanicalgarden.org/PlantFinder/PlantFinderSearch.aspx?search=", species_query)
+    }
+    plant_list_url <- if (identical(species_name, "Pinus ponderosa")) {
+      "http://www.theplantlist.org/tpl1.1/record/kew-2562565"
+    } else {
+      paste0("http://www.theplantlist.org/tpl1.1/search?q=", species_query)
+    }
+
+    tags$div(
+      style = "display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px;",
+      tags$div(
+        class = "bien-link-card",
+        tags$strong("Wikipedia"), tags$br(),
+        tags$a(wikipedia_url, href = wikipedia_url, target = "_blank"),
+        tags$p(style = "margin:6px 0 0 0;color:#444;font-size:0.92em;", paste("Species page generated from:", species_name))
+      ),
+      tags$div(
+        class = "bien-link-card",
+        tags$strong("Plants of the World Online (Kew)"), tags$br(),
+        tags$a(powo_url, href = powo_url, target = "_blank"),
+        tags$p(style = "margin:6px 0 0 0;color:#444;font-size:0.92em;", "Direct taxon link for Pinus ponderosa; otherwise species search results.")
+      ),
+      tags$div(
+        class = "bien-link-card",
+        tags$strong("Missouri Botanical Garden"), tags$br(),
+        tags$a(mbg_url, href = mbg_url, target = "_blank"),
+        tags$p(style = "margin:6px 0 0 0;color:#444;font-size:0.92em;", "Direct Plant Finder link for Pinus ponderosa; otherwise Plant Finder search.")
+      ),
+      tags$div(
+        class = "bien-link-card",
+        tags$strong("The Plant List"), tags$br(),
+        tags$a(plant_list_url, href = plant_list_url, target = "_blank"),
+        tags$p(style = "margin:6px 0 0 0;color:#444;font-size:0.92em;", "Direct record link for Pinus ponderosa; otherwise species search.")
+      )
     )
   })
 
