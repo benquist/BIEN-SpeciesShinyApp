@@ -200,7 +200,8 @@ resolve_filter_profile <- function(input) {
       use_cultivated_filter = TRUE,
       include_cultivated = FALSE,
       only_geovalid = TRUE,
-      exclude_human_observation_records = FALSE
+      exclude_human_observation_records = FALSE,
+      only_plot_observations = FALSE
     ))
   }
 
@@ -211,7 +212,8 @@ resolve_filter_profile <- function(input) {
     use_cultivated_filter = if (is.null(input$use_cultivated_filter)) TRUE else isTRUE(input$use_cultivated_filter),
     include_cultivated = if (is.null(input$include_cultivated)) FALSE else isTRUE(input$include_cultivated),
     only_geovalid = if (is.null(input$only_geovalid)) TRUE else isTRUE(input$only_geovalid),
-    exclude_human_observation_records = if (is.null(input$exclude_human_observation_records)) FALSE else isTRUE(input$exclude_human_observation_records)
+    exclude_human_observation_records = if (is.null(input$exclude_human_observation_records)) FALSE else isTRUE(input$exclude_human_observation_records),
+    only_plot_observations = if (is.null(input$only_plot_observations)) FALSE else isTRUE(input$only_plot_observations)
   )
 }
 
@@ -1227,6 +1229,7 @@ ui <- fluidPage(
           condition = "input.use_cultivated_filter == true",
           checkboxInput("include_cultivated", "Include cultivated records (turn off to hide them)", value = FALSE)
         ),
+        checkboxInput("only_plot_observations", "Show only plot/survey observation records", value = FALSE),
         checkboxInput("only_geovalid", "Keep only BIEN geovalid coordinates (hide flagged / non-geovalid points)", value = TRUE),
         checkboxInput("exclude_human_observation_records", "Exclude field observation and citizen science records (HumanObservation + iNaturalist)", value = FALSE)
       ),
@@ -1636,6 +1639,7 @@ server <- function(input, output, session) {
       filter_cfg$include_cultivated,
       filter_cfg$use_introduced_filter,
       filter_cfg$natives_only,
+      filter_cfg$only_plot_observations,
       filter_cfg$only_geovalid,
       filter_cfg$exclude_human_observation_records,
       sep = "||"
@@ -1670,6 +1674,10 @@ server <- function(input, output, session) {
         if (isTRUE(filter_cfg$exclude_human_observation_records)) {
           occ <- occ %>%
             filter(!observation_category %in% c("Citizen science (iNaturalist)", "Field observation (HumanObservation)"))
+        }
+        if (isTRUE(filter_cfg$only_plot_observations)) {
+          occ <- occ %>%
+            filter(observation_category == "Plot / survey")
         }
         if (nrow(occ) > occ_limit) {
           occ <- sample_occurrence_rows(occ, target_n = occ_limit, sample_method = display_sampling_method)
@@ -1720,6 +1728,7 @@ server <- function(input, output, session) {
         use_introduced_filter = filter_cfg$use_introduced_filter,
         include_cultivated = filter_cfg$include_cultivated,
         natives_only = filter_cfg$natives_only,
+        only_plot_observations = filter_cfg$only_plot_observations,
         only_geovalid = filter_cfg$only_geovalid,
         exclude_human_observation_records = filter_cfg$exclude_human_observation_records,
         query_cache_key = cache_key,
@@ -1820,6 +1829,7 @@ server <- function(input, output, session) {
       paste0("# natives_only = ", tolower(as.character(filter_cfg$natives_only))),
       paste0("# use_cultivated_filter = ", tolower(as.character(filter_cfg$use_cultivated_filter))),
       paste0("# include_cultivated = ", tolower(as.character(filter_cfg$include_cultivated))),
+      paste0("# only_plot_observations = ", tolower(as.character(filter_cfg$only_plot_observations))),
       paste0("# only_geovalid = ", tolower(as.character(filter_cfg$only_geovalid))),
       paste0("# exclude_human_observation_records = ", tolower(as.character(filter_cfg$exclude_human_observation_records))),
       "",
@@ -1839,6 +1849,11 @@ server <- function(input, output, session) {
         "occ_active <- occ_active %>% categorize_observation_records() %>% dplyr::filter(!observation_category %in% c('Citizen science (iNaturalist)', 'Field observation (HumanObservation)'))"
       } else {
         "# No post-query exclusion of citizen science / HumanObservation rows is active."
+      },
+      if (isTRUE(filter_cfg$only_plot_observations)) {
+        "occ_active <- occ_active %>% categorize_observation_records() %>% dplyr::filter(observation_category == 'Plot / survey')"
+      } else {
+        "# Plot-only filter is not active."
       },
       "",
       "# 1) Liberal occurrence query (includes native + introduced, cultivated + uncultivated,",
@@ -2672,6 +2687,7 @@ server <- function(input, output, session) {
       "<br><strong>Mapped-point cap requested:</strong> ", res$map_point_cap,
       "<br><strong>Mapped-point native / introduced status:</strong> ", introduced_line,
       "<br><strong>Mapped-point cultivated status:</strong> ", cultivated_line,
+      "<br><strong>Show only plot/survey records:</strong> ", ifelse(isTRUE(res$only_plot_observations), "yes", "no"),
       "<br><strong>Exclude field observation + citizen science records (HumanObservation + iNaturalist):</strong> ", ifelse(isTRUE(res$exclude_human_observation_records), "yes", "no"),
       "<br><strong>Use BIEN default conservative filter profile:</strong> ", ifelse(isTRUE(res$use_default_filter_profile), "yes", "no"),
       "<br><strong>Coordinate / geovalid summary:</strong> ", geovalid_line,
@@ -2965,6 +2981,12 @@ server <- function(input, output, session) {
       "all observation-source categories retained (including field observation / citizen science)"
     }
 
+    plot_only_txt <- if (isTRUE(filter_cfg$only_plot_observations)) {
+      "only plot/survey records retained"
+    } else {
+      "all observation categories (plot + non-plot) retained"
+    }
+
     tags$div(
       style = if (default_mode) {
         "background:#e8f5e9;border:1px solid #b7dfb9;color:#1b5e20;padding:8px 10px;border-radius:6px;margin:8px 0 10px 0;font-size:0.92em;"
@@ -2973,7 +2995,7 @@ server <- function(input, output, session) {
       },
       tags$strong(if (default_mode) "Default (conservative ecological view): " else "Current requested filter view: "),
       paste0(
-        "Showing ", intro_txt, "; ", cultivated_txt, "; ", geo_txt, "; and ", obs_source_txt, "."
+        "Showing ", intro_txt, "; ", cultivated_txt, "; ", geo_txt, "; ", obs_source_txt, "; and ", plot_only_txt, "."
       ),
       tags$br(),
       tags$span(
