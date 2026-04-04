@@ -1583,10 +1583,11 @@ server <- function(input, output, session) {
       updateNumericInput(session, "occurrence_limit", value = min(2000, max(200, as.numeric(input$occurrence_limit))))
       updateNumericInput(session, "map_point_cap", value = min(1000, max(100, as.numeric(input$map_point_cap))))
       updateNumericInput(session, "query_timeout", value = min(15, max(10, as.numeric(input$query_timeout))))
+      updateCheckboxInput(session, "only_plot_observations", value = FALSE)
       last_lucky_species(lucky$species)
       updateTextInput(session, "species", value = lucky$species)
       showNotification(
-        paste0("Lucky species selected: ", lucky$species, ". Click 'Query BIEN' to run the query."),
+        paste0("Lucky species selected: ", lucky$species, ". Plot-only filtering was turned off for this run. Click 'Query BIEN' to query across BIEN occurrence categories."),
         type = "message",
         duration = 6
       )
