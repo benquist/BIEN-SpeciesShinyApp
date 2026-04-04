@@ -101,6 +101,11 @@ find_best_species_spelling <- function(species_name, timeout_sec = 20) {
   candidates <- unique(str_squish(as.character(genus_rows[[species_col]])))
   candidates <- candidates[!is.na(candidates) & nzchar(candidates)]
   candidates <- unique(vapply(candidates, normalize_species_name, character(1)))
+
+  if (any(tolower(candidates) == tolower(species_name))) {
+    return(list(status = "exact_match_found"))
+  }
+
   candidates <- candidates[tolower(candidates) != tolower(species_name)]
 
   if (length(candidates) == 0) {
@@ -304,10 +309,10 @@ categorize_observation_records <- function(df) {
     # iNaturalist citizen science (highest priority for citizen science detection)
     str_detect(combined_txt, "inaturalist") ~ "Citizen science (iNaturalist)",
 
-    # Darwin Core HumanObservation (general citizen science / field observations)
+    # Darwin Core HumanObservation (general field observations)
     # Use word boundary to avoid false positives from "observational_plots", "observation_id", etc.
     (str_detect(basis_txt_lower, "humanobservation|human observation") |
-     (str_detect(combined_txt, "\\bhuman\\s+observation\\b|\\bhuman_observation\\b") & !str_detect(combined_txt, "specimen|museum|herb"))) ~ "Citizen science / field observation",
+     (str_detect(combined_txt, "\\bhuman\\s+observation\\b|\\bhuman_observation\\b") & !str_detect(combined_txt, "specimen|museum|herb"))) ~ "Field observation (HumanObservation)",
 
     # GBIF-aggregated records (various sources, not specifically citizen science)
     str_detect(combined_txt, "gbif") ~ "GBIF / other aggregator",
@@ -424,7 +429,7 @@ count_occurrence_records <- function(species_name, cultivated = FALSE, natives_o
     )
 
     BIEN:::.BIEN_sql(count_query, fetch.query = FALSE)
-  }, timeout_sec = min(timeout_sec, 8))
+  }, timeout_sec = min(timeout_sec, 20))
 
   if (inherits(count_res, "error")) {
     return(list(total = NA_real_, note = conditionMessage(count_res)))
@@ -1102,8 +1107,10 @@ ui <- fluidPage(
         checkboxInput("include_cultivated", "Include cultivated records (turn off to hide them)", value = FALSE)
       ),
       checkboxInput("only_geovalid", "Keep only BIEN geovalid coordinates (hide flagged / non-geovalid points)", value = TRUE),
+      checkboxInput("exclude_human_observation_records", "Exclude citizen science and HumanObservation records", value = FALSE),
       uiOutput("filter_selection_summary"),
       numericInput("occurrence_limit", "Occurrence records to keep in app sample", value = 1000, min = 200, max = 50000, step = 200),
+      numericInput("map_point_cap", "Max mapped occurrence points", value = 800, min = 100, max = 5000, step = 100),
       checkboxInput("randomize_occurrence_sample", "Allow randomized or balanced subsampling for the displayed app sample (turn off to keep the returned BIEN sample as-is)", value = TRUE),
       selectInput("map_sampling_method", "If too many occurrence records are available, balance the display using", choices = c("Balanced by datasource" = "datasource", "Balanced by observation type" = "observation_type", "Balanced by broader observation category" = "observation_category", "Random sample" = "random", "First returned" = "head"), selected = "datasource"),
       selectInput("map_color_by", "Color map points by", choices = c("Observation category" = "category", "Raw BIEN observation_type" = "type"), selected = "category"),
@@ -1391,6 +1398,7 @@ server <- function(input, output, session) {
   # of the same query return much faster without re-contacting BIEN.
   query_cache <- new.env(parent = emptyenv())
   summary_cache <- new.env(parent = emptyenv())
+  summary_cache_nonce <- reactiveVal(0L)
   trait_cache <- new.env(parent = emptyenv())
   range_cache <- new.env(parent = emptyenv())
   manual_query_nonce <- reactiveVal(0L)
@@ -1400,6 +1408,11 @@ server <- function(input, output, session) {
       return(NULL)
     }
     get(cache_key, envir = cache_env, inherits = FALSE)
+  }
+
+  set_summary_cache <- function(cache_key, value) {
+    assign(cache_key, value, envir = summary_cache)
+    summary_cache_nonce(isolate(summary_cache_nonce()) + 1L)
   }
 
   query_trigger <- reactiveVal("run")
@@ -1419,6 +1432,7 @@ server <- function(input, output, session) {
     include_range_query <- if (is.null(input$include_range_query)) FALSE else isTRUE(input$include_range_query)
     timeout_sec <- max(15, as.numeric(input$query_timeout))
     occ_limit <- max(200, as.numeric(input$occurrence_limit))
+    map_point_cap <- max(100, as.numeric(input$map_point_cap))
     trait_limit <- max(100, as.numeric(input$trait_limit))
     sample_random <- if (is.null(input$randomize_occurrence_sample)) TRUE else isTRUE(input$randomize_occurrence_sample)
     map_sampling_method <- if (is.null(input$map_sampling_method)) "datasource" else input$map_sampling_method
@@ -1434,6 +1448,7 @@ server <- function(input, output, session) {
       include_range_query,
       timeout_sec,
       occ_limit,
+      map_point_cap,
       trait_limit,
       sample_random,
       map_sampling_method,
@@ -1442,6 +1457,7 @@ server <- function(input, output, session) {
       if (is.null(input$use_introduced_filter)) TRUE else isTRUE(input$use_introduced_filter),
       if (is.null(input$natives_only)) TRUE else isTRUE(input$natives_only),
       if (is.null(input$only_geovalid)) TRUE else isTRUE(input$only_geovalid),
+      if (is.null(input$exclude_human_observation_records)) FALSE else isTRUE(input$exclude_human_observation_records),
       sep = "||"
     )
 
@@ -1471,10 +1487,17 @@ server <- function(input, output, session) {
 
       if (is.data.frame(occ)) {
         occ <- categorize_observation_records(occ)
+        if (isTRUE(input$exclude_human_observation_records)) {
+          occ <- occ %>%
+            filter(!observation_category %in% c("Citizen science (iNaturalist)", "Field observation (HumanObservation)"))
+        }
         if (nrow(occ) > occ_limit) {
           occ <- sample_occurrence_rows(occ, target_n = occ_limit, sample_method = display_sampling_method)
         }
       }
+
+      query_errors <- c(if (retry_mode) "retry_mode=connection_backoff" else NULL, occ_bundle$notes, occ_error)
+      query_errors <- query_errors[!is.na(query_errors)]
 
       name_suggestion <- NULL
       if (isTRUE(input$enable_taxon_autocorrect) && is.data.frame(occ) && nrow(occ) == 0 && !is_bien_connection_error(query_errors)) {
@@ -1483,11 +1506,8 @@ server <- function(input, output, session) {
       }
 
       incProgress(0.85, detail = "Preparing map and QA summary")
-      occ_prepared <- if (is.data.frame(occ)) prepare_occurrences(occ, map_point_cap = 800, sample_method = display_sampling_method) else list(data = NULL, lat_col = NULL, lon_col = NULL, qa = list(total = 0, coord_valid = 0, kept = 0, removed = 0, removed_invalid = 0, duplicates_removed = 0), map_cap_applied = FALSE, map_cap = 800, original_kept = 0, sample_method = display_sampling_method)
+      occ_prepared <- if (is.data.frame(occ)) prepare_occurrences(occ, map_point_cap = map_point_cap, sample_method = display_sampling_method) else list(data = NULL, lat_col = NULL, lon_col = NULL, qa = list(total = 0, coord_valid = 0, kept = 0, removed = 0, removed_invalid = 0, duplicates_removed = 0), map_cap_applied = FALSE, map_cap = map_point_cap, original_kept = 0, sample_method = display_sampling_method)
       family_name <- extract_primary_value(occ, c("scrubbed_family", "family", "verbatim_family"))
-
-      query_errors <- c(if (retry_mode) "retry_mode=connection_backoff" else NULL, occ_bundle$notes, occ_error)
-      query_errors <- query_errors[!is.na(query_errors)]
       reconciliation_tbl <- build_reconciliation_table(species_name, occ, NULL, query_errors, NULL)
 
       incProgress(1, detail = "Done")
@@ -1509,6 +1529,7 @@ server <- function(input, output, session) {
         include_range_query = include_range_query,
         timeout_sec = timeout_sec,
         occ_limit = occ_limit,
+        map_point_cap = map_point_cap,
         trait_limit = trait_limit,
         occ_fetch_limit = occ_limit_used,
         trait_fetch_limit = trait_fetch_limit,
@@ -1517,6 +1538,7 @@ server <- function(input, output, session) {
         use_introduced_filter = if (is.null(input$use_introduced_filter)) TRUE else isTRUE(input$use_introduced_filter),
         include_cultivated = if (is.null(input$include_cultivated)) FALSE else isTRUE(input$include_cultivated),
         natives_only = if (is.null(input$natives_only)) TRUE else isTRUE(input$natives_only),
+        exclude_human_observation_records = if (is.null(input$exclude_human_observation_records)) FALSE else isTRUE(input$exclude_human_observation_records),
         query_cache_key = cache_key,
         query_elapsed_sec = round(as.numeric(difftime(Sys.time(), query_started, units = "secs")), 1),
         cache_hit = FALSE,
@@ -1545,7 +1567,7 @@ server <- function(input, output, session) {
   }, ignoreInit = TRUE)
 
   output$spelling_suggestion_ui <- renderUI({
-    res <- bien_results()
+    res <- req(bien_results())
     suggestion <- res$name_suggestion
 
     if (!isTRUE(input$enable_taxon_autocorrect) || is.null(suggestion)) {
@@ -2068,6 +2090,59 @@ server <- function(input, output, session) {
 
   # Keep the potentially slower BIEN total-count and source-mix queries manual so
   # opening Summary Statistics does not block the whole app.
+  observeEvent(bien_results(), {
+    res <- bien_results()
+    req(res)
+
+    cache_key <- paste0(res$query_cache_key, "||summary")
+    cached <- get_cached_result(summary_cache, cache_key)
+    if (!is.null(cached) && !is.null(cached$total) && !is.na(cached$total) && !is.null(cached$total_all) && !is.na(cached$total_all)) {
+      return(NULL)
+    }
+
+    use_cultivated_filter <- if (is.null(input$use_cultivated_filter)) TRUE else isTRUE(input$use_cultivated_filter)
+    use_introduced_filter <- if (is.null(input$use_introduced_filter)) TRUE else isTRUE(input$use_introduced_filter)
+    count_include_cultivated <- if (use_cultivated_filter) isTRUE(input$include_cultivated) else TRUE
+    count_natives_only <- if (identical(res$occ_strategy, "fallback_relaxed_native") || identical(res$occ_strategy, "fallback_relaxed_geo")) {
+      FALSE
+    } else if (use_introduced_filter) {
+      if (is.null(input$natives_only)) TRUE else isTRUE(input$natives_only)
+    } else {
+      FALSE
+    }
+    count_only_geovalid <- if (identical(res$occ_strategy, "fallback_relaxed_geo")) {
+      FALSE
+    } else {
+      if (is.null(input$only_geovalid)) TRUE else isTRUE(input$only_geovalid)
+    }
+
+    occ_total_info <- count_occurrence_records(
+      species_name = res$species,
+      cultivated = count_include_cultivated,
+      natives_only = count_natives_only,
+      only_geovalid = count_only_geovalid,
+      timeout_sec = res$timeout_sec
+    )
+
+    occ_total_all_info <- count_occurrence_records(
+      species_name = res$species,
+      cultivated = TRUE,
+      natives_only = FALSE,
+      only_geovalid = FALSE,
+      timeout_sec = max(res$timeout_sec, 60)
+    )
+
+    out <- list(
+      total = occ_total_info$total,
+      note = occ_total_info$note,
+      total_all = occ_total_all_info$total,
+      total_all_note = occ_total_all_info$note,
+      source_mix = if (!is.null(cached)) cached$source_mix else NULL,
+      loaded = !is.null(cached) && isTRUE(cached$loaded)
+    )
+    set_summary_cache(cache_key, out)
+  }, ignoreInit = TRUE)
+
   summary_results <- eventReactive(input$load_summary_counts, {
     res <- bien_results()
     req(res)
@@ -2075,7 +2150,7 @@ server <- function(input, output, session) {
 
     cache_key <- paste0(res$query_cache_key, "||summary")
     cached <- get_cached_result(summary_cache, cache_key)
-    if (!is.null(cached)) {
+    if (!is.null(cached) && is.data.frame(cached$source_mix) && nrow(cached$source_mix) > 0) {
       return(cached)
     }
 
@@ -2097,13 +2172,29 @@ server <- function(input, output, session) {
       }
 
       incProgress(0.4, detail = "Counting total BIEN matches")
-      occ_total_info <- count_occurrence_records(
-        species_name = res$species,
-        cultivated = count_include_cultivated,
-        natives_only = count_natives_only,
-        only_geovalid = count_only_geovalid,
-        timeout_sec = res$timeout_sec
-      )
+      occ_total_info <- if (!is.null(cached) && !is.null(cached$total) && !is.na(cached$total)) {
+        list(total = cached$total, note = cached$note)
+      } else {
+        count_occurrence_records(
+          species_name = res$species,
+          cultivated = count_include_cultivated,
+          natives_only = count_natives_only,
+          only_geovalid = count_only_geovalid,
+          timeout_sec = res$timeout_sec
+        )
+      }
+
+      occ_total_all_info <- if (!is.null(cached) && !is.null(cached$total_all) && !is.na(cached$total_all)) {
+        list(total = cached$total_all, note = cached$total_all_note)
+      } else {
+        count_occurrence_records(
+          species_name = res$species,
+          cultivated = TRUE,
+          natives_only = FALSE,
+          only_geovalid = FALSE,
+          timeout_sec = max(res$timeout_sec, 60)
+        )
+      }
 
       incProgress(0.8, detail = "Estimating BIEN source mix")
       occ_source_mix <- count_occurrence_source_mix(
@@ -2117,10 +2208,12 @@ server <- function(input, output, session) {
       out <- list(
         total = occ_total_info$total,
         note = occ_total_info$note,
+        total_all = occ_total_all_info$total,
+        total_all_note = occ_total_all_info$note,
         source_mix = occ_source_mix,
         loaded = TRUE
       )
-      assign(cache_key, out, envir = summary_cache)
+      set_summary_cache(cache_key, out)
       out
     })
   }, ignoreInit = TRUE)
@@ -2136,7 +2229,9 @@ server <- function(input, output, session) {
     if (is.null(summary_bundle)) {
       summary_bundle <- list(
         total = NA_real_,
-        note = "Click 'Load BIEN total counts and source mix (slower)' to fetch optional BIEN totals for this species.",
+        note = "Auto-fetching BIEN total counts for this species; click 'Load BIEN total counts and source mix (slower)' for provenance fractions.",
+        total_all = NA_real_,
+        total_all_note = "Auto-fetching BIEN all-observation total for this species.",
         source_mix = NULL,
         loaded = FALSE
       )
@@ -2146,6 +2241,8 @@ server <- function(input, output, session) {
     occ_returned_n <- if (!is.null(res$occurrences_returned)) res$occurrences_returned else occ_n
     occ_total_available <- summary_bundle$total
     occ_total_note <- summary_bundle$note
+    occ_total_all_available <- summary_bundle$total_all
+    occ_total_all_note <- summary_bundle$total_all_note
     occ_total_txt <- if (!is.null(occ_total_available) && !is.na(occ_total_available)) {
       format(occ_total_available, big.mark = ",", scientific = FALSE, trim = TRUE)
     } else if (!is.null(occ_total_note) && nzchar(occ_total_note)) {
@@ -2175,6 +2272,25 @@ server <- function(input, output, session) {
     category_line <- if (is.data.frame(res$occurrences) && "observation_category" %in% names(res$occurrences)) {
       counts <- sort(table(res$occurrences$observation_category), decreasing = TRUE)
       paste(paste(names(counts), as.integer(counts), sep = ": "), collapse = " | ")
+    } else {
+      "Not available"
+    }
+    field_obs_source_line <- if (is.data.frame(res$occurrences) && "observation_category" %in% names(res$occurrences)) {
+      source_col <- find_first_col(res$occurrences, c("datasource", "data_source", "collection", "source"))
+      if (!is.null(source_col)) {
+        field_obs_rows <- res$occurrences %>%
+          filter(observation_category == "Field observation (HumanObservation)")
+        if (nrow(field_obs_rows) > 0) {
+          src_counts <- sort(table(trimws(as.character(field_obs_rows[[source_col]]))), decreasing = TRUE)
+          src_names <- names(src_counts)
+          src_names[src_names == "" | is.na(src_names)] <- "unknown"
+          paste(paste(src_names, as.integer(src_counts), sep = ": "), collapse = " | ")
+        } else {
+          "No rows in this category for current app sample"
+        }
+      } else {
+        "Datasource column not returned by BIEN for this query"
+      }
     } else {
       "Not available"
     }
@@ -2261,11 +2377,51 @@ server <- function(input, output, session) {
     } else {
       "No occurrence rows were returned"
     }
+    mapped_pct_of_returned <- if (!is.na(occ_returned_n) && occ_returned_n > 0) {
+      round(100 * mappable_n / occ_returned_n, 1)
+    } else {
+      NA_real_
+    }
+    mapped_pct_of_total <- if (!is.null(occ_total_all_available) && !is.na(occ_total_all_available) && occ_total_all_available > 0) {
+      round(100 * mappable_n / occ_total_all_available, 3)
+    } else {
+      NA_real_
+    }
+    mapped_pct_line <- if (!is.na(mapped_pct_of_total)) {
+      paste0(
+        mapped_pct_of_total,
+        "% of ALL BIEN observations for this species are currently mapped (",
+        format(mappable_n, big.mark = ",", scientific = FALSE, trim = TRUE),
+        " / ",
+        format(occ_total_all_available, big.mark = ",", scientific = FALSE, trim = TRUE),
+        ")"
+      )
+    } else if (!is.na(mapped_pct_of_returned)) {
+      paste0(
+        mapped_pct_of_returned,
+        "% of BIEN returned rows are currently mapped (",
+        format(mappable_n, big.mark = ",", scientific = FALSE, trim = TRUE),
+        " / ",
+        format(occ_returned_n, big.mark = ",", scientific = FALSE, trim = TRUE),
+        "). ALL-species BIEN total is still loading."
+      )
+    } else {
+      "Not available"
+    }
+    mapped_pct_guidance <- "If this mapped proportion seems low, click Query BIEN again to refresh a randomized sample, or increase 'Max mapped occurrence points' (and optionally 'Occurrence records to keep in app sample') in the sidebar."
 
     HTML(paste0(
       "<strong>Species:</strong> ", res$species,
       "<br><strong>Family:</strong> ", family_name,
       "<br><strong>Total BIEN occurrence records matching current strategy (count only; not downloaded):</strong> ", occ_total_txt,
+      "<br><strong>Total ALL BIEN observations for this species (count only; unfiltered):</strong> ",
+      if (!is.null(occ_total_all_available) && !is.na(occ_total_all_available)) {
+        format(occ_total_all_available, big.mark = ",", scientific = FALSE, trim = TRUE)
+      } else if (!is.null(occ_total_all_note) && nzchar(occ_total_all_note)) {
+        paste0("Not available (", occ_total_all_note, ")")
+      } else {
+        "Not available"
+      },
       "<br><strong>Fraction of total matching BIEN records by source class (derived from BIEN provenance):</strong> ", source_mix_line,
       "<br><strong>Observation records returned by BIEN:</strong> ", occ_returned_n,
       "<br><strong>Observation records kept in app sample:</strong> ", occ_n,
@@ -2278,14 +2434,19 @@ server <- function(input, output, session) {
       },
       "<br><strong>Query elapsed time:</strong> ", query_elapsed_txt,
       "<br><strong>Observation categories in app sample:</strong> ", category_line,
+      "<br><strong>Datasource breakdown for 'Field observation (HumanObservation)':</strong> ", field_obs_source_line,
+      "<br><strong>Mapped-point proportion:</strong> ", mapped_pct_line,
+      "<br><strong>Mapped-point guidance:</strong> ", mapped_pct_guidance,
       if (!is.null(source_mix_mismatch_note)) {
         paste0("<br><strong>Category reconciliation note:</strong> ", source_mix_mismatch_note)
       } else {
         ""
       },
       "<br><strong>Mappable occurrence points:</strong> ", mappable_n,
+      "<br><strong>Mapped-point cap requested:</strong> ", res$map_point_cap,
       "<br><strong>Mapped-point native / introduced status:</strong> ", introduced_line,
       "<br><strong>Mapped-point cultivated status:</strong> ", cultivated_line,
+      "<br><strong>Exclude citizen science/HumanObservation records:</strong> ", ifelse(isTRUE(res$exclude_human_observation_records), "yes", "no"),
       "<br><strong>Coordinate / geovalid summary:</strong> ", geovalid_line,
       "<br><strong>Overview map status:</strong> ", map_status,
       "<br><strong>Observation records after QA:</strong> ", res$occurrences_prepared$original_kept,
@@ -2315,51 +2476,123 @@ server <- function(input, output, session) {
   })
 
   output$overview_notice <- renderUI({
+    summary_cache_nonce()
     res <- bien_results()
     occ_n <- if (is.data.frame(res$occurrences)) nrow(res$occurrences) else 0
     mappable_n <- if (is.data.frame(res$occurrences_prepared$data)) nrow(res$occurrences_prepared$data) else 0
     cached_range <- get_cached_result(range_cache, res$query_cache_key)
     has_range <- !is.null(cached_range) && inherits(cached_range$range_sf, "sf") && nrow(cached_range$range_sf) > 0
 
+    summary_cache_key <- paste0(res$query_cache_key, "||summary")
+    summary_bundle <- get_cached_result(summary_cache, summary_cache_key)
+    occ_total_all_available <- if (!is.null(summary_bundle)) summary_bundle$total_all else NA_real_
+    mapped_pct_sample_notice <- if (occ_n > 0) {
+      paste0(
+        round(100 * mappable_n / occ_n, 1),
+        "% of the current app sample is mapped (",
+        format(mappable_n, big.mark = ",", scientific = FALSE, trim = TRUE),
+        " / ",
+        format(occ_n, big.mark = ",", scientific = FALSE, trim = TRUE),
+        ")"
+      )
+    } else {
+      "No current app-sample mapped fraction is available yet."
+    }
+    mapped_pct_total_notice <- if (!is.null(occ_total_all_available) && !is.na(occ_total_all_available) && occ_total_all_available > 0) {
+      paste0(
+        round(100 * mappable_n / occ_total_all_available, 3),
+        "% of ALL BIEN observations are currently mapped (",
+        format(mappable_n, big.mark = ",", scientific = FALSE, trim = TRUE),
+        " / ",
+        format(occ_total_all_available, big.mark = ",", scientific = FALSE, trim = TRUE),
+        ")"
+      )
+    } else if (!is.null(summary_bundle) && !is.null(summary_bundle$total_all_note) && nzchar(summary_bundle$total_all_note)) {
+      paste0(
+        "ALL-species BIEN total is not available yet (",
+        summary_bundle$total_all_note,
+        ")"
+      )
+    } else {
+      "ALL-species BIEN total is still loading."
+    }
+    mapped_pct_guidance <- tags$span(
+      "If this proportion is lower than you want, rerun ",
+      tags$code("Query BIEN"),
+      " to refresh the randomized sample, or increase ",
+      tags$code("Max mapped occurrence points"),
+      " in the sidebar."
+    )
+
+    make_notice <- function(style, title, message) {
+      tags$div(
+        style = style,
+        tags$strong(title),
+        message,
+        tags$br(), tags$strong("Mapped fraction (app sample): "), mapped_pct_sample_notice,
+        tags$br(), tags$strong("Mapped fraction (ALL BIEN observations): "), mapped_pct_total_notice,
+        tags$br(), tags$strong("Adjustment: "), mapped_pct_guidance
+      )
+    }
+
     if (!identical(res$occ_strategy, "strict")) {
-      return(tags$div(
-        style = "background:#fff3cd;border:1px solid #ffe69c;color:#664d03;padding:10px 12px;border-radius:6px;margin:8px 0;",
-        tags$strong("Filter relaxation note: "),
-        "The current result used a fallback BIEN strategy (",
-        tags$code(res$occ_strategy),
-        ") to recover records. Interpret native/geovalid conclusions cautiously."
+      return(make_notice(
+        "background:#fff3cd;border:1px solid #ffe69c;color:#664d03;padding:10px 12px;border-radius:6px;margin:8px 0;",
+        "Filter relaxation note: ",
+        tags$span(
+          "The current result used a fallback BIEN strategy (",
+          tags$code(res$occ_strategy),
+          ") to recover records. Interpret native/geovalid conclusions cautiously."
+        )
       ))
     }
 
     if (is_bien_connection_error(res$query_errors)) {
-      return(tags$div(
-        style = "background:#f8d7da;border:1px solid #f1aeb5;color:#842029;padding:10px 12px;border-radius:6px;margin:8px 0;",
-        tags$strong("BIEN connection note: "),
+      return(make_notice(
+        "background:#f8d7da;border:1px solid #f1aeb5;color:#842029;padding:10px 12px;border-radius:6px;margin:8px 0;",
+        "BIEN connection note: ",
         "The public BIEN database is temporarily at capacity or refusing new connections, so this query could not retrieve occurrence records right now. Please try `Query BIEN` again shortly."
       ))
     }
 
     if (occ_n > 0 && mappable_n == 0 && has_range) {
-      return(tags$div(
-        style = "background:#fff3cd;border:1px solid #ffe69c;color:#664d03;padding:10px 12px;border-radius:6px;margin:8px 0;",
-        tags$strong("Overview note: "),
+      return(make_notice(
+        "background:#fff3cd;border:1px solid #ffe69c;color:#664d03;padding:10px 12px;border-radius:6px;margin:8px 0;",
+        "Overview note: ",
         "BIEN returned occurrence rows for this species, but not usable latitude/longitude coordinates in the current response. The map below is showing the BIEN range polygon instead."
       ))
     }
 
     if (occ_n > 0 && mappable_n == 0 && isTRUE(res$include_range_query)) {
-      return(tags$div(
-        style = "background:#cff4fc;border:1px solid #9eeaf9;color:#055160;padding:10px 12px;border-radius:6px;margin:8px 0;",
-        tags$strong("Overview note: "),
+      return(make_notice(
+        "background:#cff4fc;border:1px solid #9eeaf9;color:#055160;padding:10px 12px;border-radius:6px;margin:8px 0;",
+        "Overview note: ",
         "Occurrence rows were returned without usable coordinates. Open the Range tab to load BIEN's optional range layer for this species."
       ))
     }
 
     if (occ_n > 0 && mappable_n == 0) {
-      return(tags$div(
-        style = "background:#f8d7da;border:1px solid #f1aeb5;color:#842029;padding:10px 12px;border-radius:6px;margin:8px 0;",
-        tags$strong("Overview note: "),
+      return(make_notice(
+        "background:#f8d7da;border:1px solid #f1aeb5;color:#842029;padding:10px 12px;border-radius:6px;margin:8px 0;",
+        "Overview note: ",
         "Occurrence rows were returned, but no usable coordinates are available to map for this species in the current BIEN response."
+      ))
+    }
+
+    if (isTRUE(res$occurrences_prepared$map_cap_applied)) {
+      return(make_notice(
+        "background:#cff4fc;border:1px solid #9eeaf9;color:#055160;padding:10px 12px;border-radius:6px;margin:8px 0;",
+        "Overview note: ",
+        "The map below is showing a capped subset of mappable occurrence points for responsiveness. The full returned occurrence table remains available in the Observation Table tab."
+      ))
+    }
+
+    if (occ_n > 0) {
+      return(tags$div(
+        style = "background:#e9f7ef;border:1px solid #badbcc;color:#0f5132;padding:10px 12px;border-radius:6px;margin:8px 0;",
+        tags$strong("Mapped fraction (app sample): "), mapped_pct_sample_notice,
+        tags$br(), tags$strong("Mapped fraction (ALL BIEN observations): "), mapped_pct_total_notice,
+        tags$br(), tags$strong("Adjustment: "), mapped_pct_guidance
       ))
     }
 
@@ -2475,7 +2708,7 @@ server <- function(input, output, session) {
   output$filter_selection_summary <- renderUI({
     default_mode <- isTRUE(input$use_introduced_filter) && isTRUE(input$natives_only) &&
       isTRUE(input$use_cultivated_filter) && !isTRUE(input$include_cultivated) &&
-      isTRUE(input$only_geovalid)
+      isTRUE(input$only_geovalid) && !isTRUE(input$exclude_human_observation_records)
 
     intro_txt <- if (isTRUE(input$use_introduced_filter) && isTRUE(input$natives_only)) {
       "BIEN-classified native / not introduced records only"
@@ -2499,6 +2732,12 @@ server <- function(input, output, session) {
       "both geovalid and flagged / non-geovalid coordinates shown"
     }
 
+    obs_source_txt <- if (isTRUE(input$exclude_human_observation_records)) {
+      "citizen science and HumanObservation records excluded"
+    } else {
+      "all observation-source categories retained (including citizen science / HumanObservation)"
+    }
+
     tags$div(
       style = if (default_mode) {
         "background:#e8f5e9;border:1px solid #b7dfb9;color:#1b5e20;padding:8px 10px;border-radius:6px;margin:8px 0 10px 0;font-size:0.92em;"
@@ -2507,7 +2746,7 @@ server <- function(input, output, session) {
       },
       tags$strong(if (default_mode) "Default (conservative ecological view): " else "Current requested filter view: "),
       paste0(
-        "Showing ", intro_txt, "; ", cultivated_txt, "; and ", geo_txt, "."
+        "Showing ", intro_txt, "; ", cultivated_txt, "; ", geo_txt, "; and ", obs_source_txt, "."
       ),
       tags$br(),
       tags$span(

@@ -81,6 +81,55 @@ The app organizes BIEN output into several linked views:
 - Range visualization when BIEN shapefiles are available.
 - Reconciliation and error log tab for transparent debugging and interpretation.
 
+## How observation types are parsed (citizen science, plot, GBIF, etc.)
+
+The app creates a broad label called `observation_category` for each occurrence row so users can quickly understand where records are coming from.
+
+### Fields used
+
+The parser reads multiple BIEN provenance fields together:
+
+- `observation_type`
+- `datasource` / `data_source` / `collection` / `source`
+- `dataset` / `dataset_name`
+- `basisOfRecord` (Darwin Core, when present)
+
+If one field is missing, the app still uses the others.
+
+### Rule order (first match wins)
+
+The app applies rules in a fixed order. This matters because one row can contain multiple keywords.
+
+1. **Specimen / herbarium**
+	Triggered by terms like specimen, herbarium, preserved, museum, or `PreservedSpecimen`.
+
+2. **Plot / survey**
+	Triggered by terms like plot, survey, inventory, monitoring.
+
+3. **Citizen science (iNaturalist)**
+	Triggered by iNaturalist-specific provenance text.
+
+4. **Field observation (HumanObservation)**
+	Triggered by Darwin Core `HumanObservation` (or equivalent text patterns with word boundaries).
+	A specimen/museum guard is included to avoid mislabeling preserved collections as field observations.
+
+5. **GBIF / other aggregator**
+	Triggered by GBIF text when earlier rules do not match.
+
+6. **Other / unknown**
+	Used when none of the above patterns are detected.
+
+### Why "GBIF" is separate from "citizen science"
+
+GBIF is an aggregator that contains many source types (specimens, surveys, citizen science, and others).
+So a row mentioning GBIF is not automatically treated as citizen science unless there is stronger evidence (for example, `HumanObservation` or iNaturalist provenance).
+
+### Important interpretation notes
+
+- These labels are practical interpretation categories, not formal taxonomic or occurrence standards.
+- The logic is text-and-metadata based, so sparse provenance fields can still end up as `Other / unknown`.
+- For methods-level detail, see `CODE_WORKFLOW_DOCUMENTATION.md`, which documents Darwin Core alignment and caveats.
+
 ## Filtering options
 
 The sidebar includes controls to tailor the biological interpretation of returned records:
