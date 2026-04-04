@@ -151,7 +151,7 @@ sql_quote_literal <- function(x) {
 # occurrence map and (2) randomize the returned row order on the BIEN side so
 # widespread species are less likely to be dominated by whichever datasource
 # happens to come first in the backend table (for example FIA plot rows).
-query_occurrence_randomized <- function(species_name, cultivated = FALSE, natives_only = TRUE, only_geovalid = TRUE, limit = 1000, record_limit = 500) {
+query_occurrence_randomized <- function(species_name, cultivated = FALSE, natives_only = TRUE, only_geovalid = TRUE, limit = 1000, record_limit = 500, randomize_order = TRUE) {
   cultivated_ <- BIEN:::.cultivated_check(cultivated)
   newworld_ <- BIEN:::.newworld_check(NULL)
   taxonomy_ <- BIEN:::.taxonomy_check(TRUE)
@@ -161,6 +161,8 @@ query_occurrence_randomized <- function(species_name, cultivated = FALSE, native
   natives_ <- BIEN:::.natives_check(natives_only)
   collection_ <- BIEN:::.collection_check(FALSE)
   geovalid_ <- BIEN:::.geovalid_check(only_geovalid)
+
+  order_clause <- if (isTRUE(randomize_order)) "ORDER BY random()" else ""
 
   query <- paste(
     "SELECT scrubbed_species_binomial", taxonomy_$select,
@@ -179,7 +181,8 @@ query_occurrence_randomized <- function(species_name, cultivated = FALSE, native
     "AND scrubbed_species_binomial IS NOT NULL",
     "AND lower(coalesce(observation_type, '')) NOT LIKE '%trait%'",
     "AND lower(coalesce(observation_type, '')) NOT LIKE '%measurement%'",
-    "ORDER BY random() LIMIT", as.integer(limit), ";"
+    order_clause,
+    "LIMIT", as.integer(limit), ";"
   )
 
   BIEN:::.BIEN_sql(
@@ -217,7 +220,7 @@ resolve_filter_profile <- function(input) {
   )
 }
 
-query_occurrence_with_fallback <- function(species_name, input, occ_limit, occ_page_size, timeout_sec, connection_retry = FALSE, max_plans = 3, per_plan_timeout = 25) {
+query_occurrence_with_fallback <- function(species_name, input, occ_limit, occ_page_size, timeout_sec, connection_retry = FALSE, max_plans = 3, per_plan_timeout = 25, randomize_order = TRUE) {
   filter_cfg <- resolve_filter_profile(input)
   include_cultivated <- if (filter_cfg$use_cultivated_filter) filter_cfg$include_cultivated else TRUE
   natives_only <- if (filter_cfg$use_introduced_filter) filter_cfg$natives_only else FALSE
@@ -249,7 +252,8 @@ query_occurrence_with_fallback <- function(species_name, input, occ_limit, occ_p
           natives_only = plan$natives.only,
           only_geovalid = plan$only.geovalid,
           limit = plan$limit,
-          record_limit = plan$record_limit
+          record_limit = plan$record_limit,
+          randomize_order = randomize_order
         )
       },
       timeout_sec = min(timeout_sec, per_plan_timeout),
@@ -1680,7 +1684,8 @@ server <- function(input, output, session) {
         timeout_sec,
         connection_retry = retry_mode,
         max_plans = if (isTRUE(lucky_fast_mode)) 1 else 3,
-        per_plan_timeout = if (isTRUE(lucky_fast_mode)) 10 else 25
+        per_plan_timeout = if (isTRUE(lucky_fast_mode)) 8 else 25,
+        randomize_order = !isTRUE(lucky_fast_mode)
       )
       occ <- occ_bundle$data
       occ_strategy <- occ_bundle$strategy
