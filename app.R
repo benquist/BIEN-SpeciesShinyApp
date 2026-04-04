@@ -72,6 +72,69 @@ normalize_species_name <- function(x) {
   paste(parts, collapse = " ")
 }
 
+# Suggest a likely intended species spelling by searching BIEN species names within
+# the same genus and ranking by edit distance.
+find_best_species_spelling <- function(species_name, timeout_sec = 20) {
+  species_name <- normalize_species_name(species_name)
+  parts <- strsplit(species_name, "\\s+")[[1]]
+
+  if (length(parts) < 2) {
+    return(list(status = "insufficient_input"))
+  }
+
+  genus <- parts[1]
+  genus_rows <- safe_bien_call(BIEN_taxonomy_genus(genus), timeout_sec = min(timeout_sec, 20))
+
+  if (inherits(genus_rows, "error")) {
+    return(list(status = "lookup_error", message = conditionMessage(genus_rows)))
+  }
+
+  if (!is.data.frame(genus_rows) || nrow(genus_rows) == 0) {
+    return(list(status = "no_genus_candidates"))
+  }
+
+  species_col <- find_first_col(genus_rows, c("scrubbed_species_binomial", "species", "scientific_name"))
+  if (is.null(species_col)) {
+    return(list(status = "no_species_column"))
+  }
+
+  candidates <- unique(str_squish(as.character(genus_rows[[species_col]])))
+  candidates <- candidates[!is.na(candidates) & nzchar(candidates)]
+  candidates <- unique(vapply(candidates, normalize_species_name, character(1)))
+  candidates <- candidates[tolower(candidates) != tolower(species_name)]
+
+  if (length(candidates) == 0) {
+    return(list(status = "no_alternative_candidates"))
+  }
+
+  d <- as.integer(utils::adist(tolower(species_name), tolower(candidates))[1, ])
+  best_idx <- which.min(d)
+  best_name <- candidates[[best_idx]]
+  best_dist <- d[[best_idx]]
+  max_len <- max(1L, nchar(species_name), nchar(best_name))
+  norm_dist <- best_dist / max_len
+
+  confidence <- if (norm_dist <= 0.15) {
+    "high"
+  } else if (norm_dist <= 0.30) {
+    "medium"
+  } else {
+    "low"
+  }
+
+  if (best_dist > 4 && norm_dist > 0.35) {
+    return(list(status = "low_quality_match", suggested_name = best_name, confidence = confidence, edit_distance = best_dist))
+  }
+
+  list(
+    status = "suggested",
+    suggested_name = best_name,
+    confidence = confidence,
+    edit_distance = best_dist,
+    candidate_count = length(candidates)
+  )
+}
+
 sql_quote_literal <- function(x) {
   x <- as.character(x)
   x <- gsub("'", "''", x, fixed = TRUE)
@@ -992,6 +1055,8 @@ ui <- fluidPage(
   sidebarLayout(
     sidebarPanel(
       textInput("species", "Species name", value = "Eschscholzia californica", placeholder = "Genus species"),
+      checkboxInput("enable_taxon_autocorrect", "Suggest closest BIEN taxon spelling when no exact match", value = TRUE),
+      uiOutput("spelling_suggestion_ui"),
       actionButton("run_query", "Query BIEN", class = "btn-primary"),
       actionButton("retry_bien", "Retry BIEN connection (with backoff)", class = "btn-warning btn-sm"),
       tags$script(HTML("$(document).on('keydown', '#species', function(e) { if (e.key === 'Enter') { $('#run_query').click(); return false; } });")),
@@ -1307,6 +1372,7 @@ server <- function(input, output, session) {
   summary_cache <- new.env(parent = emptyenv())
   trait_cache <- new.env(parent = emptyenv())
   range_cache <- new.env(parent = emptyenv())
+  manual_query_nonce <- reactiveVal(0L)
 
   get_cached_result <- function(cache_env, cache_key) {
     if (is.null(cache_key) || !exists(cache_key, envir = cache_env, inherits = FALSE)) {
@@ -1323,7 +1389,7 @@ server <- function(input, output, session) {
     query_trigger("retry")
   }, ignoreInit = TRUE)
 
-  bien_results <- eventReactive(list(input$run_query, input$retry_bien), {
+  bien_results <- eventReactive(list(input$run_query, input$retry_bien, manual_query_nonce()), {
     req(nchar(str_trim(input$species)) > 0)
 
     species_input <- str_squish(input$species)
@@ -1389,6 +1455,12 @@ server <- function(input, output, session) {
         }
       }
 
+      name_suggestion <- NULL
+      if (isTRUE(input$enable_taxon_autocorrect) && is.data.frame(occ) && nrow(occ) == 0 && !is_bien_connection_error(query_errors)) {
+        incProgress(0.6, detail = "No exact BIEN species records found; checking closest species spelling")
+        name_suggestion <- find_best_species_spelling(species_name, timeout_sec = min(timeout_sec, 20))
+      }
+
       incProgress(0.85, detail = "Preparing map and QA summary")
       occ_prepared <- if (is.data.frame(occ)) prepare_occurrences(occ, map_point_cap = 800, sample_method = display_sampling_method) else list(data = NULL, lat_col = NULL, lon_col = NULL, qa = list(total = 0, coord_valid = 0, kept = 0, removed = 0, removed_invalid = 0, duplicates_removed = 0), map_cap_applied = FALSE, map_cap = 800, original_kept = 0, sample_method = display_sampling_method)
       family_name <- extract_primary_value(occ, c("scrubbed_family", "family", "verbatim_family"))
@@ -1428,13 +1500,52 @@ server <- function(input, output, session) {
         query_elapsed_sec = round(as.numeric(difftime(Sys.time(), query_started, units = "secs")), 1),
         cache_hit = FALSE,
         query_errors = query_errors,
-        reconciliation = reconciliation_tbl
+        reconciliation = reconciliation_tbl,
+        name_suggestion = name_suggestion
       )
 
       assign(cache_key, result, envir = query_cache)
       result
     })
   }, ignoreInit = TRUE)
+
+  observeEvent(input$apply_name_suggestion, {
+    res <- bien_results()
+    suggestion <- res$name_suggestion
+    if (is.null(suggestion) || !identical(suggestion$status, "suggested")) {
+      return(NULL)
+    }
+
+    updateTextInput(session, "species", value = suggestion$suggested_name)
+    session$onFlushed(function() {
+      manual_query_nonce(isolate(manual_query_nonce()) + 1L)
+      query_trigger("run")
+    }, once = TRUE)
+  }, ignoreInit = TRUE)
+
+  output$spelling_suggestion_ui <- renderUI({
+    res <- bien_results()
+    suggestion <- res$name_suggestion
+
+    if (!isTRUE(input$enable_taxon_autocorrect) || is.null(suggestion)) {
+      return(NULL)
+    }
+
+    if (!identical(suggestion$status, "suggested")) {
+      return(NULL)
+    }
+
+    tags$div(
+      style = "margin:6px 0 10px 0;padding:8px 10px;border:1px solid #b7d2e8;border-radius:6px;background:#eef6ff;",
+      tags$div(
+        style = "font-size:0.92em;color:#1e4f78;",
+        tags$strong("Best BIEN spelling match: "),
+        tags$span(suggestion$suggested_name),
+        " (confidence: ", suggestion$confidence, ")"
+      ),
+      actionButton("apply_name_suggestion", "Use this name", class = "btn btn-default btn-sm", style = "margin-top:6px;")
+    )
+  })
 
   observeEvent(bien_results(), {
     updateTabsetPanel(session, "main_tabs", selected = "Occurrence Map")
