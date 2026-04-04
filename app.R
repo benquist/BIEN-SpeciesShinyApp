@@ -2699,35 +2699,51 @@ server <- function(input, output, session) {
     summary_cache_key <- paste0(res$query_cache_key, "||summary")
     summary_bundle <- get_cached_result(summary_cache, summary_cache_key)
     occ_total_all_available <- if (!is.null(summary_bundle)) summary_bundle$total_all else NA_real_
-    mapped_pct_sample_notice <- if (occ_n > 0) {
-      paste0(
-        round(100 * mappable_n / occ_n, 1),
-        "% of the current app sample is mapped (",
-        format(mappable_n, big.mark = ",", scientific = FALSE, trim = TRUE),
-        " / ",
-        format(occ_n, big.mark = ",", scientific = FALSE, trim = TRUE),
-        ")"
-      )
-    } else {
-      "No current app-sample mapped fraction is available yet."
+    mapped_pct_sample_notice <- {
+      sample_pct <- if (is.finite(occ_n) && occ_n > 0 && is.finite(mappable_n) && mappable_n >= 0) {
+        round(100 * mappable_n / occ_n, 1)
+      } else {
+        NA_real_
+      }
+
+      if (is.finite(sample_pct)) {
+        paste0(
+          sample_pct,
+          "% of the current app sample is mapped (",
+          format(mappable_n, big.mark = ",", scientific = FALSE, trim = TRUE),
+          " / ",
+          format(occ_n, big.mark = ",", scientific = FALSE, trim = TRUE),
+          ")"
+        )
+      } else {
+        "No current app-sample mapped fraction is available yet."
+      }
     }
-    mapped_pct_total_notice <- if (!is.null(occ_total_all_available) && !is.na(occ_total_all_available) && occ_total_all_available > 0) {
-      paste0(
-        round(100 * mappable_n / occ_total_all_available, 3),
-        "% of ALL BIEN observations are currently mapped (",
-        format(mappable_n, big.mark = ",", scientific = FALSE, trim = TRUE),
-        " / ",
-        format(occ_total_all_available, big.mark = ",", scientific = FALSE, trim = TRUE),
-        "; sampled subset of all BIEN observations)"
-      )
-    } else if (!is.null(summary_bundle) && !is.null(summary_bundle$total_all_note) && nzchar(summary_bundle$total_all_note)) {
+    mapped_pct_total_notice <- {
+      total_pct <- if (is.finite(occ_total_all_available) && occ_total_all_available > 0 && is.finite(mappable_n) && mappable_n >= 0) {
+        round(100 * mappable_n / occ_total_all_available, 3)
+      } else {
+        NA_real_
+      }
+
+      if (is.finite(total_pct)) {
+        paste0(
+          total_pct,
+          "% of ALL BIEN observations are currently mapped (",
+          format(mappable_n, big.mark = ",", scientific = FALSE, trim = TRUE),
+          " / ",
+          format(occ_total_all_available, big.mark = ",", scientific = FALSE, trim = TRUE),
+          "; sampled subset of all BIEN observations)"
+        )
+      } else if (!is.null(summary_bundle) && !is.null(summary_bundle$total_all_note) && nzchar(summary_bundle$total_all_note)) {
       paste0(
         "ALL-species BIEN total is not available yet (",
         summary_bundle$total_all_note,
         ")"
       )
-    } else {
-      "ALL-species BIEN total is still loading."
+      } else {
+        "ALL-species BIEN total is still loading."
+      }
     }
     mapped_pct_guidance <- tags$span(
       "If this proportion is lower than you want, rerun ",
@@ -2748,7 +2764,7 @@ server <- function(input, output, session) {
       )
     }
 
-    if (!identical(res$occ_strategy, "strict")) {
+    if (identical(res$occ_strategy, "fallback_relaxed_native") || identical(res$occ_strategy, "fallback_relaxed_geo")) {
       return(make_notice(
         "background:#fff3cd;border:1px solid #ffe69c;color:#664d03;padding:10px 12px;border-radius:6px;margin:8px 0;",
         "Filter relaxation note: ",
