@@ -153,15 +153,16 @@ sql_quote_literal <- function(x) {
 }
 
 # Custom native status filter that handles NULL values properly.
-# BIEN's internal :::natives_check() excludes NULLs, which causes species with missing
-# native.status data to return zero records. This version includes NULL as a valid case
-# since absence of classification shouldn't exclude a species.
+# BIEN's internal :::natives_check() checks `is_introduced`column and excludes NULLs,
+# which causes species with missing is_introduced data to return zero records.
+# This version includes NULL as a valid case since absence of classification
+# shouldn't exclude a species from a 'natives only' query.
 natives_check_with_null_fallback <- function(natives_only = TRUE) {
   if (isTRUE(natives_only)) {
-    # Include native records OR records with unknown native status (NULL)
-    list(query = "AND (native.status = 'native' OR native.status IS NULL)")
+    # Include records where is_introduced = 0 (native) OR is_introduced IS NULL (unknown)
+    list(query = "AND (is_introduced=0 OR is_introduced IS NULL) ")
   } else {
-    # Include all records regardless of native status
+    # Include all records regardless of native/introduced status
     list(query = "")
   }
 }
@@ -182,7 +183,11 @@ query_occurrence_randomized <- function(species_name, cultivated = FALSE, native
   collection_ <- BIEN:::.collection_check(FALSE)
   geovalid_ <- BIEN:::.geovalid_check(only_geovalid)
 
-  order_clause <- if (isTRUE(randomize_order)) "ORDER BY random()" else ""
+  # Skip randomization for large fetches to avoid expensive ORDER BY random() on massive result sets.
+  # For species like Populus tremuloides (880k+ records), ORDER BY random() can take minutes.
+  # Instead, rely on natural table ordering which is already fairly distributed across datasources.
+  use_randomize <- isTRUE(randomize_order) && limit <= 10000
+  order_clause <- if (use_randomize) "ORDER BY random()" else ""
 
   query <- paste(
     "SELECT scrubbed_species_binomial", taxonomy_$select,
@@ -1707,7 +1712,12 @@ server <- function(input, output, session) {
       if (retry_mode) {
         incProgress(0.1, detail = "Retry mode: re-attempting BIEN connection with backoff")
       } else {
-        incProgress(0.15, detail = "Occurrences: retrieving records from BIEN (large or widespread species can take longer)")
+        detail_msg <- if (occ_fetch_limit > 10000) {
+          "Occurrences: fast-loading large species (randomization disabled for speed)"
+        } else {
+          "Occurrences: retrieving randomized sample of records from BIEN"
+        }
+        incProgress(0.15, detail = detail_msg)
       }
       occ_bundle <- query_occurrence_with_fallback(
         species_name,
@@ -1717,8 +1727,8 @@ server <- function(input, output, session) {
         timeout_sec,
         connection_retry = retry_mode,
         max_plans = if (isTRUE(lucky_fast_mode)) 1 else 3,
-        per_plan_timeout = if (isTRUE(lucky_fast_mode)) 8 else 25,
-        randomize_order = !isTRUE(lucky_fast_mode)
+        per_plan_timeout = if (isTRUE(lucky_fast_mode)) 8 else 20,
+        randomize_order = !isTRUE(lucky_fast_mode) && occ_fetch_limit <= 10000
       )
       occ <- occ_bundle$data
       occ_strategy <- occ_bundle$strategy
