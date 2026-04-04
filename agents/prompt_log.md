@@ -64,3 +64,10 @@
 - Context/result: Implemented Lucky plot-filter reset change at commit 2a80413; shinyapps deploy currently blocked by transient HTTP 409 task lock.
 - Files changed: agents/prompt_log.md
 - Completed by: GitHub Copilot
+
+- Date: 2026-04-04
+- Prompt summary: User reported Juniperus virginiana causes app freeze/hang and requested diagnosis.
+- Requested outcomes: Diagnose likely root cause and harden query path to avoid freeze.
+- Result: Added strict total query budget and fail-fast break on timeout/pending-row backend errors; verified Juniperus now exits with backend_timeout_error instead of hanging; deployed successfully.
+- Files changed: app.R; rsconnect/shinyapps.io/benquist/bien-species-shinyapp.dcf; agents/prompt_log.md
+- Completed by: GitHub Copilot
