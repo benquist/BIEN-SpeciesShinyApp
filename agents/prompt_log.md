@@ -96,3 +96,10 @@
 - Result: Committed and pushed at b4f8354; repo synced with origin/main.
 - Files changed: agents/agent_chat_provenance_log.txt; agents/prompt_log.md; rsconnect/shinyapps.io/benquist/bien-species-shinyapp.dcf
 - Completed by: GitHub Copilot
+
+- Date: 2026-04-04
+- Prompt summary: User reported app spins on reopen after closing during a long run.
+- Requested outcomes: Diagnose startup/reopen freeze and restore responsiveness.
+- Result: Identified BIEN SQL error on missing basisofrecord column from source-mix query; removed that column from BIEN-side SQL and redeployed. App now returns HTTP 200 with fast start-transfer.
+- Files changed: app.R; rsconnect/shinyapps.io/benquist/bien-species-shinyapp.dcf; agents/prompt_log.md
+- Completed by: GitHub Copilot
