@@ -152,6 +152,20 @@ sql_quote_literal <- function(x) {
   paste0("'", x, "'")
 }
 
+# Custom native status filter that handles NULL values properly.
+# BIEN's internal :::natives_check() excludes NULLs, which causes species with missing
+# native.status data to return zero records. This version includes NULL as a valid case
+# since absence of classification shouldn't exclude a species.
+natives_check_with_null_fallback <- function(natives_only = TRUE) {
+  if (isTRUE(natives_only)) {
+    # Include native records OR records with unknown native status (NULL)
+    list(query = "AND (native.status = 'native' OR native.status IS NULL)")
+  } else {
+    # Include all records regardless of native status
+    list(query = "")
+  }
+}
+
 # Query BIEN occurrences with the same biological filters used by the BIEN helper,
 # but (1) exclude trait-linked rows that belong in the Traits tab rather than the
 # occurrence map and (2) randomize the returned row order on the BIEN side so
@@ -164,7 +178,7 @@ query_occurrence_randomized <- function(species_name, cultivated = FALSE, native
   native_ <- BIEN:::.native_check(TRUE)
   observation_ <- BIEN:::.observation_check(TRUE)
   political_ <- BIEN:::.political_check(FALSE)
-  natives_ <- BIEN:::.natives_check(natives_only)
+  natives_ <- natives_check_with_null_fallback(natives_only)
   collection_ <- BIEN:::.collection_check(FALSE)
   geovalid_ <- BIEN:::.geovalid_check(only_geovalid)
 
@@ -339,7 +353,7 @@ get_random_bien_species_candidate <- function(timeout_sec = 10) {
 count_mappable_occurrences_for_species <- function(species_name, cultivated = FALSE, natives_only = TRUE, only_geovalid = TRUE, timeout_sec = 8) {
   cultivated_ <- BIEN:::.cultivated_check(cultivated)
   newworld_ <- BIEN:::.newworld_check(NULL)
-  natives_ <- BIEN:::.natives_check(natives_only)
+  natives_ <- natives_check_with_null_fallback(natives_only)
   observation_ <- BIEN:::.observation_check(TRUE)
   geovalid_ <- BIEN:::.geovalid_check(only_geovalid)
 
@@ -553,7 +567,7 @@ count_occurrence_records <- function(species_name, cultivated = FALSE, natives_o
   count_res <- safe_bien_call({
     cultivated_ <- BIEN:::.cultivated_check(cultivated)
     newworld_ <- BIEN:::.newworld_check(NULL)
-    natives_ <- BIEN:::.natives_check(natives_only)
+    natives_ <- natives_check_with_null_fallback(natives_only)
     observation_ <- BIEN:::.observation_check(TRUE)
     geovalid_ <- BIEN:::.geovalid_check(only_geovalid)
 
@@ -592,7 +606,7 @@ count_occurrence_records <- function(species_name, cultivated = FALSE, natives_o
 count_occurrence_source_mix <- function(species_name, cultivated = FALSE, natives_only = TRUE, only_geovalid = TRUE, timeout_sec = 30) {
   cultivated_ <- BIEN:::.cultivated_check(cultivated)
   newworld_ <- BIEN:::.newworld_check(NULL)
-  natives_ <- BIEN:::.natives_check(natives_only)
+  natives_ <- natives_check_with_null_fallback(natives_only)
   observation_ <- BIEN:::.observation_check(TRUE)
   geovalid_ <- BIEN:::.geovalid_check(only_geovalid)
 
