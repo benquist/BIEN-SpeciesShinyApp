@@ -1430,7 +1430,7 @@ server <- function(input, output, session) {
       "library(BIEN)",
       "library(dplyr)",
       "",
-      paste0("species_name <- \\"", species_for_code, "\\""),
+      paste0('species_name <- "', species_for_code, '"'),
       "",
       "# 1) Occurrence records used for mapping (no filters applied)",
       "occ_all <- BIEN_occurrence_species(",
