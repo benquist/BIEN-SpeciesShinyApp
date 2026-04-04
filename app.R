@@ -1532,6 +1532,7 @@ server <- function(input, output, session) {
   range_cache <- new.env(parent = emptyenv())
   manual_query_nonce <- reactiveVal(0L)
   last_lucky_species <- reactiveVal(NULL)
+  forced_query_species <- reactiveVal(NULL)
 
   get_cached_result <- function(cache_env, cache_key) {
     if (is.null(cache_key) || !exists(cache_key, envir = cache_env, inherits = FALSE)) {
@@ -1579,6 +1580,7 @@ server <- function(input, output, session) {
       updateNumericInput(session, "map_point_cap", value = min(1000, max(100, as.numeric(input$map_point_cap))))
       updateNumericInput(session, "query_timeout", value = min(15, max(10, as.numeric(input$query_timeout))))
       last_lucky_species(lucky$species)
+      forced_query_species(lucky$species)
       updateTextInput(session, "species", value = lucky$species)
       showNotification(
         paste0("Lucky species: ", lucky$species, ". Running a fast first-pass query..."),
@@ -1595,10 +1597,13 @@ server <- function(input, output, session) {
   }, ignoreInit = TRUE)
 
   bien_results <- eventReactive(list(input$run_query, input$retry_bien, manual_query_nonce()), {
-    req(nchar(str_trim(input$species)) > 0)
-
-    species_input <- str_squish(input$species)
+    forced_species <- isolate(forced_query_species())
+    species_input <- str_squish(if (!is.null(forced_species) && nzchar(forced_species)) forced_species else input$species)
+    req(nzchar(species_input))
     species_name <- normalize_species_name(species_input)
+    if (!is.null(forced_species) && nzchar(forced_species) && tolower(species_name) == tolower(normalize_species_name(forced_species))) {
+      forced_query_species(NULL)
+    }
     retry_mode <- identical(query_trigger(), "retry")
     include_range_query <- if (is.null(input$include_range_query)) FALSE else isTRUE(input$include_range_query)
     timeout_sec <- max(15, as.numeric(input$query_timeout))
@@ -1767,6 +1772,7 @@ server <- function(input, output, session) {
       return(NULL)
     }
 
+    forced_query_species(suggestion$suggested_name)
     updateTextInput(session, "species", value = suggestion$suggested_name)
     session$onFlushed(function() {
       manual_query_nonce(isolate(manual_query_nonce()) + 1L)
