@@ -325,69 +325,6 @@ query_occurrence_with_fallback <- function(species_name, input, occ_limit, occ_p
   list(data = last_result, strategy = final_strategy, notes = notes, limit_used = fast_limit)
 }
 
-get_random_bien_species_candidate <- function(timeout_sec = 10) {
-  candidate_query <- paste(
-    "SELECT scrubbed_species_binomial",
-    "FROM view_full_occurrence_individual",
-    "WHERE scrubbed_species_binomial IS NOT NULL",
-    "AND latitude IS NOT NULL AND longitude IS NOT NULL",
-    "AND latitude BETWEEN -90 AND 90",
-    "AND longitude BETWEEN -180 AND 180",
-    "AND higher_plant_group NOT IN ('Algae','Bacteria','Fungi')",
-    "ORDER BY random() LIMIT 1;"
-  )
-
-  out <- safe_bien_call(BIEN:::.BIEN_sql(candidate_query, fetch.query = FALSE), timeout_sec = timeout_sec)
-  if (inherits(out, "error") || !is.data.frame(out) || nrow(out) == 0) {
-    return(NULL)
-  }
-
-  species_col <- find_first_col(out, c("scrubbed_species_binomial", "species", "scientific_name"))
-  if (is.null(species_col)) {
-    return(NULL)
-  }
-
-  species_name <- normalize_species_name(as.character(out[[species_col]][1]))
-  if (!nzchar(species_name)) {
-    return(NULL)
-  }
-
-  species_name
-}
-
-count_mappable_occurrences_for_species <- function(species_name, cultivated = FALSE, natives_only = TRUE, only_geovalid = TRUE, timeout_sec = 8) {
-  cultivated_ <- BIEN:::.cultivated_check(cultivated)
-  newworld_ <- BIEN:::.newworld_check(NULL)
-  natives_ <- natives_check_with_null_fallback(natives_only)
-  observation_ <- BIEN:::.observation_check(TRUE)
-  geovalid_ <- BIEN:::.geovalid_check(only_geovalid)
-
-  count_query <- paste(
-    "SELECT COUNT(*) AS mappable_n",
-    "FROM view_full_occurrence_individual",
-    "WHERE scrubbed_species_binomial in (", paste(sql_quote_literal(species_name), collapse = ", "), ")",
-    cultivated_$query, newworld_$query, natives_$query, observation_$query, geovalid_$query,
-    "AND higher_plant_group NOT IN ('Algae','Bacteria','Fungi')",
-    "AND (georef_protocol is NULL OR georef_protocol<>'county centroid')",
-    "AND (is_centroid IS NULL OR is_centroid=0)",
-    "AND scrubbed_species_binomial IS NOT NULL",
-    "AND latitude IS NOT NULL AND longitude IS NOT NULL",
-    "AND latitude BETWEEN -90 AND 90",
-    "AND longitude BETWEEN -180 AND 180;"
-  )
-
-  out <- safe_bien_call(BIEN:::.BIEN_sql(count_query, fetch.query = FALSE), timeout_sec = timeout_sec)
-  if (inherits(out, "error") || !is.data.frame(out) || nrow(out) == 0) {
-    return(NA_real_)
-  }
-
-  count_col <- find_first_col(out, c("mappable_n", "count"))
-  if (is.null(count_col)) {
-    return(NA_real_)
-  }
-
-  suppressWarnings(as.numeric(out[[count_col]][1]))
-}
 
 find_lucky_species_with_mappable_points <- function(input, min_mappable_points = 30, max_attempts = 3, timeout_sec = 12) {
   # Use a curated pool to keep Lucky mode responsive even when BIEN backend calls are slow.
@@ -616,20 +553,27 @@ count_occurrence_source_mix <- function(species_name, cultivated = FALSE, native
   geovalid_ <- BIEN:::.geovalid_check(only_geovalid)
 
   build_mix_query <- function(combined_sql) {
+    # Wrap in a LIMIT-capped subquery to prevent multi-minute full-table GROUP BY
+    # scans on very large species (e.g. Solidago canadensis 880 k+ rows).
+    # Source-mix fractions are approximate for species with > 50 000 filtered rows.
     paste(
-      "SELECT CASE",
-      paste0("WHEN ", combined_sql, " LIKE '%inaturalist%' THEN 'iNaturalist'"),
-      paste0("WHEN ", combined_sql, " LIKE '%trait%' OR ", combined_sql, " LIKE '%measurement%' THEN 'Traits'"),
-      paste0("WHEN ", combined_sql, " LIKE '%plot%' OR ", combined_sql, " LIKE '%survey%' OR ", combined_sql, " LIKE '%inventory%' OR ", combined_sql, " LIKE '%monitoring%' THEN 'Plots'"),
-      paste0("WHEN ", combined_sql, " LIKE '%specimen%' OR ", combined_sql, " LIKE '%herb%' OR ", combined_sql, " LIKE '%preserved specimen%' OR ", combined_sql, " LIKE '%preservedspecimen%' OR ", combined_sql, " LIKE '%museum%' THEN 'Specimens'"),
-      "ELSE 'Other' END AS source_group, COUNT(*) AS n_records",
-      "FROM view_full_occurrence_individual",
-      "WHERE scrubbed_species_binomial in (", paste(sql_quote_literal(species_name), collapse = ", "), ")",
+      "SELECT source_group, COUNT(*) AS n_records",
+      "FROM (",
+      "  SELECT CASE",
+      paste0("  WHEN ", combined_sql, " LIKE '%inaturalist%' THEN 'iNaturalist'"),
+      paste0("  WHEN ", combined_sql, " LIKE '%trait%' OR ", combined_sql, " LIKE '%measurement%' THEN 'Traits'"),
+      paste0("  WHEN ", combined_sql, " LIKE '%plot%' OR ", combined_sql, " LIKE '%survey%' OR ", combined_sql, " LIKE '%inventory%' OR ", combined_sql, " LIKE '%monitoring%' THEN 'Plots'"),
+      paste0("  WHEN ", combined_sql, " LIKE '%specimen%' OR ", combined_sql, " LIKE '%herb%' OR ", combined_sql, " LIKE '%preserved specimen%' OR ", combined_sql, " LIKE '%preservedspecimen%' OR ", combined_sql, " LIKE '%museum%' THEN 'Specimens'"),
+      "  ELSE 'Other' END AS source_group",
+      "  FROM view_full_occurrence_individual",
+      "  WHERE scrubbed_species_binomial in (", paste(sql_quote_literal(species_name), collapse = ", "), ")",
       cultivated_$query, newworld_$query, natives_$query, observation_$query, geovalid_$query,
-      "AND higher_plant_group NOT IN ('Algae','Bacteria','Fungi')",
-      "AND (georef_protocol is NULL OR georef_protocol<>'county centroid')",
-      "AND (is_centroid IS NULL OR is_centroid=0)",
-      "AND scrubbed_species_binomial IS NOT NULL",
+      "  AND higher_plant_group NOT IN ('Algae','Bacteria','Fungi')",
+      "  AND (georef_protocol is NULL OR georef_protocol<>'county centroid')",
+      "  AND (is_centroid IS NULL OR is_centroid=0)",
+      "  AND scrubbed_species_binomial IS NOT NULL",
+      "  LIMIT 50000",
+      ") AS mix_subquery",
       "GROUP BY source_group ORDER BY n_records DESC;"
     )
   }
@@ -2488,9 +2432,9 @@ server <- function(input, output, session) {
     if (is.null(summary_bundle)) {
       summary_bundle <- list(
         total = NA_real_,
-        note = "Auto-fetching BIEN total counts for this species; click 'Load BIEN total counts and source mix (slower)' for provenance fractions.",
+        note = "Not loaded — click 'Load BIEN total counts and source mix (slower)' below to fetch the BIEN total count for this species.",
         total_all = NA_real_,
-        total_all_note = "Auto-fetching BIEN all-observation total for this species.",
+        total_all_note = "Not loaded — click 'Load BIEN total counts and source mix (slower)' below to fetch.",
         source_mix = NULL,
         loaded = FALSE
       )
@@ -2853,7 +2797,13 @@ server <- function(input, output, session) {
       return(make_notice(
         "background:#f8d7da;border:1px solid #f1aeb5;color:#842029;padding:10px 12px;border-radius:6px;margin:8px 0;",
         "Overview note: ",
-        "Occurrence rows were returned, but no usable coordinates are available to map for this species in the current BIEN response."
+        paste0(
+          "Occurrence rows were returned, but no usable latitude/longitude coordinates are available to map under the current filter settings.",
+          " This is a BIEN data availability limitation, not an app error.",
+          " To recover a map: (1) uncheck 'Keep only BIEN geovalid coordinates' in the sidebar to include non-geovalid records,",
+          " or (2) turn on 'Load BIEN range layers when the Range tab is opened' and re-query to display the BIEN range polygon instead.",
+          " See the Observation Table tab to inspect the returned rows and their coordinate fields."
+        )
       ))
     }
 
