@@ -1712,11 +1712,7 @@ server <- function(input, output, session) {
       if (retry_mode) {
         incProgress(0.1, detail = "Retry mode: re-attempting BIEN connection with backoff")
       } else {
-        detail_msg <- if (isTRUE(fast_large_species_mode) || isTRUE(lucky_fast_mode)) {
-          "Occurrences: fast-loading large species (randomization disabled for speed)"
-        } else {
-          "Occurrences: retrieving randomized sample of records from BIEN"
-        }
+        detail_msg <- "Occurrences: fast-loading records (database randomization disabled for speed)"
         incProgress(0.15, detail = detail_msg)
       }
       occ_bundle <- query_occurrence_with_fallback(
@@ -1728,7 +1724,7 @@ server <- function(input, output, session) {
         connection_retry = retry_mode,
         max_plans = if (isTRUE(lucky_fast_mode)) 1 else 3,
         per_plan_timeout = if (isTRUE(lucky_fast_mode)) 8 else 20,
-        randomize_order = !isTRUE(fast_large_species_mode) && !isTRUE(lucky_fast_mode)
+        randomize_order = FALSE
       )
       occ <- occ_bundle$data
       occ_strategy <- occ_bundle$strategy
@@ -1747,6 +1743,10 @@ server <- function(input, output, session) {
         if (isTRUE(filter_cfg$only_plot_observations)) {
           occ <- occ %>%
             filter(observation_category == "Plot / survey")
+        }
+        # Keep randomization client-side to avoid expensive ORDER BY random() on BIEN tables.
+        if (isTRUE(sample_random) && identical(display_sampling_method, "head") && nrow(occ) > 1) {
+          occ <- occ[sample.int(nrow(occ)), , drop = FALSE]
         }
         if (nrow(occ) > occ_limit) {
           occ <- sample_occurrence_rows(occ, target_n = occ_limit, sample_method = display_sampling_method)
