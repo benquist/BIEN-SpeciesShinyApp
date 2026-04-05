@@ -1236,7 +1236,7 @@ ui <- fluidPage(
       selectInput("map_color_by", "Color map points by", choices = c("Observation category" = "category", "Raw BIEN observation_type" = "type"), selected = "category"),
       numericInput("trait_limit", "Max trait records (sample)", value = 1000, min = 100, max = 50000, step = 100),
       checkboxInput("include_range_query", "Load BIEN range layers when the Range tab is opened (slower)", value = FALSE),
-      numericInput("query_timeout", "Per-step timeout (seconds)", value = 30, min = 15, max = 300, step = 15),
+      numericInput("query_timeout", "Per-step timeout (seconds)", value = 90, min = 30, max = 300, step = 15),
       selectInput(
         "map_scale",
         "Map scale",
@@ -1667,7 +1667,7 @@ server <- function(input, output, session) {
         timeout_sec,
         connection_retry = retry_mode,
         max_plans = if (isTRUE(lucky_fast_mode)) 1 else 3,
-        per_plan_timeout = if (isTRUE(lucky_fast_mode)) 8 else 20,
+        per_plan_timeout = if (isTRUE(lucky_fast_mode)) 8 else 60,
         randomize_order = FALSE
       )
       occ <- occ_bundle$data
