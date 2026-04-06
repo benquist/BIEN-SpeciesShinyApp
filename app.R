@@ -1718,7 +1718,7 @@ server <- function(input, output, session) {
       updateCheckboxInput(session, "fast_large_species_mode", value = TRUE)
       updateNumericInput(session, "occurrence_limit", value = min(2000, max(200, as.numeric(input$occurrence_limit))))
       updateNumericInput(session, "map_point_cap", value = min(1000, max(100, as.numeric(input$map_point_cap))))
-      updateNumericInput(session, "query_timeout", value = min(15, max(10, as.numeric(input$query_timeout))))
+      updateNumericInput(session, "query_timeout", value = 75)
       updateCheckboxInput(session, "only_plot_observations", value = FALSE)
       last_lucky_species(lucky$species)
       updateTextInput(session, "species", value = lucky$species)
