@@ -1,6 +1,6 @@
 # Load required packages, installing any missing CRAN dependencies on startup.
 suppressPackageStartupMessages({
-  required_packages <- c("shiny", "BIEN", "dplyr", "stringr", "leaflet", "DT", "sf")
+  required_packages <- c("shiny", "BIEN", "dplyr", "stringr", "leaflet", "DT", "sf", "ggplot2")
   missing_packages <- required_packages[!vapply(required_packages, requireNamespace, logical(1), quietly = TRUE)]
   if (length(missing_packages) > 0) {
     stop(
@@ -19,6 +19,7 @@ suppressPackageStartupMessages({
   library(leaflet)
   library(DT)
   library(sf)
+  library(ggplot2)
 })
 
 # Wrap BIEN calls in a timeout-aware `tryCatch` so slow API responses do not lock up the app.
@@ -1036,6 +1037,120 @@ build_reconciliation_table <- function(species_name, occ, traits, query_errors, 
   )
 }
 
+# Extract year from date_collected, handling multiple date formats.
+parse_collection_year <- function(date_str) {
+  if (is.null(date_str) || is.na(date_str) || !nzchar(as.character(date_str))) {
+    return(NA_integer_)
+  }
+  
+  date_str <- as.character(date_str)
+  
+  # Try to parse as ISO 8601 YYYY-MM-DD
+  tryCatch({
+    as.integer(substr(date_str, 1, 4))
+  }, error = function(e) NA_integer_)
+}
+
+# Bin temporal occurrence data into 10-year intervals and color by observation_category.
+bin_temporal_data <- function(occ_df, year_min = 1800, year_max = NULL) {
+  if (!is.data.frame(occ_df) || nrow(occ_df) == 0) {
+    return(NULL)
+  }
+  
+  # Ensure observation_category exists
+  if (!"observation_category" %in% names(occ_df)) {
+    occ_df <- categorize_observation_records(occ_df)
+  }
+  
+  # Extract year from date_collected
+  if (!"date_collected" %in% names(occ_df)) {
+    return(NULL)
+  }
+  
+  occ_df$collection_year <- sapply(occ_df$date_collected, parse_collection_year)
+  occ_valid <- occ_df[!is.na(occ_df$collection_year), , drop = FALSE]
+  
+  if (nrow(occ_valid) == 0) {
+    return(NULL)
+  }
+  
+  # Set year_max if not provided
+  if (is.null(year_max)) {
+    year_max <- max(occ_valid$collection_year, na.rm = TRUE)
+  }
+  
+  # Filter to year range
+  occ_valid <- occ_valid[occ_valid$collection_year >= year_min & occ_valid$collection_year <= year_max, , drop = FALSE]
+  
+  if (nrow(occ_valid) == 0) {
+    return(NULL)
+  }
+  
+  # Create 10-year bins
+  occ_valid$decade_bin <- (floor(occ_valid$collection_year / 10) * 10) %>% as.integer()
+  
+  # Summarize by decade and category
+  temporal_summary <- occ_valid %>%
+    group_by(decade_bin, observation_category) %>%
+    summarise(count = n(), .groups = "drop") %>%
+    arrange(decade_bin, observation_category)
+  
+  temporal_summary
+}
+
+# Summarize temporal statistics for display.
+summarize_temporal_stats <- function(occ_df) {
+  if (!is.data.frame(occ_df) || nrow(occ_df) == 0) {
+    return(list(
+      total_records = 0,
+      records_with_dates = 0,
+      earliest_year = NA,
+      latest_year = NA,
+      median_year = NA,
+      span_years = NA
+    ))
+  }
+  
+  if (!"date_collected" %in% names(occ_df)) {
+    return(list(
+      total_records = nrow(occ_df),
+      records_with_dates = 0,
+      earliest_year = NA,
+      latest_year = NA,
+      median_year = NA,
+      span_years = NA
+    ))
+  }
+  
+  occ_df$collection_year <- sapply(occ_df$date_collected, parse_collection_year)
+  years_valid <- occ_df$collection_year[!is.na(occ_df$collection_year)]
+  
+  if (length(years_valid) == 0) {
+    return(list(
+      total_records = nrow(occ_df),
+      records_with_dates = 0,
+      earliest_year = NA,
+      latest_year = NA,
+      median_year = NA,
+      span_years = NA
+    ))
+  }
+  
+  earliest <- min(years_valid, na.rm = TRUE)
+  latest <- max(years_valid, na.rm = TRUE)
+  median_yr <- as.integer(median(years_valid, na.rm = TRUE))
+  span <- latest - earliest
+  
+  list(
+    total_records = nrow(occ_df),
+    records_with_dates = length(years_valid),
+    earliest_year = earliest,
+    latest_year = latest,
+    median_year = median_yr,
+    span_years = span
+  )
+}
+
 # Main Shiny user interface: query controls plus linked tabs for occurrence, trait, and range evidence.
 ui <- fluidPage(
   tags$head(
@@ -1470,6 +1585,40 @@ ui <- fluidPage(
           actionButton("load_summary_counts", "Load BIEN total counts and source mix (slower)", class = "btn-default btn-sm"),
           br(), br(),
           htmlOutput("query_summary")
+        ),
+        tabPanel(
+          "Temporal Distribution",
+          br(),
+          tags$p(
+            style = "color:#555;max-width:900px;",
+            "Ten-year histogram of observation records by collection date and observation type (client-side, zero BIEN cost). Shows earliest and latest observations, temporal coverage, and which data sources dominate each time period."
+          ),
+          fluidRow(
+            column(3,
+              tags$div(
+                style = "background:#f9f9f9;padding:12px;border-radius:6px;",
+                tags$h5(style = "margin-top:0;", "Temporal stats"),
+                textOutput("temporal_stats"),
+                br(),
+                tags$h5(style = "margin-top:12px;", "Year range filter"),
+                sliderInput("temporal_year_range", 
+                  label = "Filter by collection year",
+                  min = 1700, max = 2030, value = c(1700, 2030), step = 10),
+                tags$p(style = "font-size:0.85em;color:#666;",
+                  "Adjust the slider to focus on specific decades. The histogram below updates automatically.")
+              )
+            ),
+            column(9,
+              plotOutput("temporal_histogram", height = 500)
+            )
+          ),
+          br(),
+          tags$div(
+            style = "font-size:0.9em;color:#666;background:#f0f4f8;padding:10px;border-radius:4px;",
+            tags$strong("Note: "), 
+            "Date-based aggregation depends on ", tags$code("date_collected"), " column from BIEN. ",
+            "Records without dates are excluded from this view but are shown in other tabs."
+          )
         ),
         tabPanel("Observation Table", br(), DTOutput("occurrence_table")),
         tabPanel("Observation Sources", br(), DTOutput("observation_source_table")),
@@ -2991,6 +3140,97 @@ server <- function(input, output, session) {
         }
       )
     )
+  })
+
+  # Temporal Distribution outputs
+  output$temporal_stats <- renderText({
+    res <- bien_results()
+    stats <- summarize_temporal_stats(res$occurrences)
+    
+    pct_with_dates <- if (stats$total_records > 0) {
+      round(100 * stats$records_with_dates / stats$total_records, 1)
+    } else {
+      0
+    }
+    
+    HTML(paste(
+      sprintf("Total records: <strong>%,d</strong>", stats$total_records),
+      sprintf("With dates: <strong>%d (%.1f%%)</strong>", stats$records_with_dates, pct_with_dates),
+      if (!is.na(stats$earliest_year)) sprintf("Earliest: <strong>%d</strong>", stats$earliest_year) else "",
+      if (!is.na(stats$latest_year)) sprintf("Latest: <strong>%d</strong>", stats$latest_year) else "",
+      if (!is.na(stats$span_years)) sprintf("Span: <strong>%d years</strong>", stats$span_years) else "",
+      if (!is.na(stats$median_year)) sprintf("Median year: <strong>%d</strong>", stats$median_year) else "",
+      sep = "<br>"
+    ))
+  })
+
+  output$temporal_histogram <- renderPlot({
+    res <- bien_results()
+    occ_df <- if (is.data.frame(res$occurrences)) res$occurrences else NULL
+    
+    if (is.null(occ_df) || nrow(occ_df) == 0) {
+      return(ggplot() + 
+        geom_blank() + 
+        labs(title = "No occurrence records with date data") +
+        theme_minimal())
+    }
+    
+    # Get year range from slider
+    year_range <- input$temporal_year_range
+    year_min <- if (!is.null(year_range)) year_range[1] else 1700
+    year_max <- if (!is.null(year_range)) year_range[2] else 2030
+    
+    # Bin temporal data
+    temporal_df <- bin_temporal_data(occ_df, year_min = year_min, year_max = year_max)
+    
+    if (is.null(temporal_df) || nrow(temporal_df) == 0) {
+      return(ggplot() + 
+        geom_blank() + 
+        labs(title = "No occurrence records with date data in selected range") +
+        theme_minimal())
+    }
+    
+    # Define a consistent color palette for observation categories
+    category_colors <- c(
+      "Specimen / herbarium" = "#8B4513",
+      "Plot / survey" = "#2E7D32",
+      "Citizen science (iNaturalist)" = "#F57C00",
+      "Field observation (HumanObservation)" = "#1976D2",
+      "GBIF / other aggregator" = "#7B1FA2",
+      "Other / unknown" = "#757575"
+    )
+    
+    # Create histogram
+    p <- ggplot(temporal_df, aes(x = decade_bin, y = count, fill = observation_category)) +
+      geom_col(position = "stack", width = 8) +
+      scale_fill_manual(
+        name = "Observation Category",
+        values = category_colors,
+        breaks = names(category_colors),
+        limits = names(category_colors)
+      ) +
+      labs(
+        title = paste0(res$species, " — Observations by Decade"),
+        x = "Collection Year (decade)",
+        y = "Number of Records"
+      ) +
+      scale_x_continuous(
+        breaks = seq(floor(year_min / 10) * 10, ceiling(year_max / 10) * 10, by = 20),
+        labels = function(x) paste0(x, "s")
+      ) +
+      theme_minimal() +
+      theme(
+        axis.text.x = element_text(angle = 45, hjust = 1, size = 11),
+        axis.text.y = element_text(size = 11),
+        axis.title = element_text(size = 12, face = "bold"),
+        legend.position = "right",
+        legend.text = element_text(size = 10),
+        panel.grid.major.y = element_line(color = "#e0e0e0", size = 0.3),
+        panel.grid.minor = element_blank(),
+        plot.title = element_text(size = 14, face = "bold", margin = margin(b = 10))
+      )
+    
+    p
   })
 
   output$occurrence_table <- renderDT({
