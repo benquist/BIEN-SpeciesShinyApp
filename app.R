@@ -1351,7 +1351,7 @@ ui <- fluidPage(
       selectInput("map_color_by", "Color map points by", choices = c("Observation category" = "category", "Raw BIEN observation_type" = "type"), selected = "category"),
       numericInput("trait_limit", "Max trait records (sample)", value = 1000, min = 100, max = 50000, step = 100),
       checkboxInput("include_range_query", "Load BIEN range layers when the Range tab is opened (slower)", value = FALSE),
-      numericInput("query_timeout", "Per-step timeout (seconds)", value = 90, min = 30, max = 300, step = 15),
+      numericInput("query_timeout", "Per-step timeout (seconds)", value = 150, min = 45, max = 500, step = 15),
       selectInput(
         "map_scale",
         "Map scale",
@@ -1808,6 +1808,15 @@ server <- function(input, output, session) {
         detail_msg <- "Occurrences: fast-loading records (database randomization disabled for speed)"
         incProgress(0.15, detail = detail_msg)
       }
+      # For large species, per-plan timeout should scale with user's total timeout setting.
+      # Allocate ~85% to the longest-running plan (COUNTs typically need most time),
+      # leaving ~15% headroom for overhead and fallback plans.
+      per_plan_timeout_sec <- if (isTRUE(lucky_fast_mode)) {
+        8  # Lucky mode stays fast
+      } else {
+        max(75, round(timeout_sec * 0.85))  # Scale with user setting, minimum 75s
+      }
+
       occ_bundle <- query_occurrence_with_fallback(
         species_name,
         input,
@@ -1816,7 +1825,7 @@ server <- function(input, output, session) {
         timeout_sec,
         connection_retry = retry_mode,
         max_plans = if (isTRUE(lucky_fast_mode)) 1 else 3,
-        per_plan_timeout = if (isTRUE(lucky_fast_mode)) 8 else 60,
+        per_plan_timeout = per_plan_timeout_sec,
         randomize_order = FALSE
       )
       occ <- occ_bundle$data
