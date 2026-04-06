@@ -103,3 +103,17 @@
 - Result: Identified BIEN SQL error on missing basisofrecord column from source-mix query; removed that column from BIEN-side SQL and redeployed. App now returns HTTP 200 with fast start-transfer.
 - Files changed: app.R; rsconnect/shinyapps.io/benquist/bien-species-shinyapp.dcf; agents/prompt_log.md
 - Completed by: GitHub Copilot
+
+- Date: 2026-04-04
+- Prompt summary: Run mandatory final pre-return checks for reopen-spin fix context after basisofrecord SQL correction and redeploy.
+- Requested outcomes: Verify prompt log, Rmd compile applicability, package build applicability, and git push status; return PASS/BLOCKED with concise evidence.
+- Files changed: agents/prompt_log.md
+- Completed by: GitHub Copilot
+
+- Date: 2026-04-06
+- Prompt summary: User reported 'I'm Feeling Lucky' button is not working correctly.
+- Requested outcomes: Fix the Lucky button so it works with current timeout settings.
+- Root cause: Lucky button was setting query_timeout to 10-15 seconds (old hardcoded values), but recent timeout fix updated defaults to 150s/min 45s, breaking Lucky mode.
+- Fix: Updated Lucky button to set query_timeout = 75 seconds. Parse check PASS. Deployed to shinyapps.io commit 74c0d08. App HTTP 200 confirmed.
+- Files changed: app.R; rsconnect/shinyapps.io/benquist/bien-species-shinyapp.dcf; agents/prompt_log.md
+- Completed by: GitHub Copilot
