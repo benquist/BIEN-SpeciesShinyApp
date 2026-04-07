@@ -1,5 +1,26 @@
 # Prompt Log
 
+- Date: 2026-04-06
+- Prompt summary: User requested replacing reporting-rule style guidance with exact reproducible code for downloaded app dataset, with plain-language summary embedded in code file.
+- Requested outcomes: Add app feature to export exact dataset and matching reproducible R code, and align manuscript section accordingly.
+- Result: Added CSV + reproducible script download actions in BIEN Query Code tab, replaced code panel output with exact dataset-reproduction script generator, and replaced manuscript reporting-checklist section with reproducible code export section.
+- Files changed: app.R; manuscript/bien_species_shinyapp_overview.tex; agents/prompt_log.md
+- Completed by: GitHub Copilot
+
+- Date: 2026-04-06
+- Prompt summary: User requested word-count expansion (excluding references), two writing agents (accuracy + concise/plain/no-jargon), and app-use steps as a list.
+- Requested outcomes: Add detail to manuscript body, convert usage steps from subsections to list format, create two writing-agent docs.
+- Result: Replaced step subsections with an ordered list plus practical guidance paragraphs; added `agents/accuracy-writer-agent.md` and `agents/plain-concise-writer-agent.md`.
+- Files changed: manuscript/bien_species_shinyapp_overview.tex; agents/accuracy-writer-agent.md; agents/plain-concise-writer-agent.md; agents/prompt_log.md
+- Completed by: GitHub Copilot
+
+- Date: 2026-04-06
+- Prompt summary: User requested option #2 for a documented agent/persona that always adds a weird, funny, non-abusive signoff and addresses user as Brian.
+- Requested outcomes: Add documented agent behavior file in repo and begin using it in responses.
+- Result: Added `agents/funny-signoff-agent.md` with explicit non-abusive rules, signoff pool, and output template.
+- Files changed: agents/funny-signoff-agent.md; agents/prompt_log.md
+- Completed by: GitHub Copilot
+
 - Date: 2026-04-04
 - Prompt summary: Re-run mandatory final pre-return checks now after post-lucky query-hang fix.
 - Requested outcomes: Verify prompt log, Rmd/package applicability, and git push status in both repos.

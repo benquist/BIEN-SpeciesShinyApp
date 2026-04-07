@@ -1,0 +1,73 @@
+\begin{thebibliography}{}
+
+\bibitem[Chang et~al., 2024]{Chang2024Shiny}
+Chang, W., Cheng, J., Allaire, J., Sievert, C., Schloerke, B., Xie, Y., Allen,
+  J., McPherson, J., Dipert, A., and Borges, B. (2024).
+\newblock {\em shiny: Web Application Framework for R}.
+\newblock R package version 1.9.1.
+
+\bibitem[Cheng et~al., 2024]{Cheng2024Leaflet}
+Cheng, J., Schloerke, B., Karambelkar, B., and Xie, Y. (2024).
+\newblock {\em leaflet: Create Interactive Web Maps with the JavaScript
+  'Leaflet' Library}.
+\newblock R package version 2.2.2.
+
+\bibitem[Enquist et~al., 2026]{Enquist2026BIEN}
+Enquist, B.~J., Maitner, B., Merow, C., et~al. (2026).
+\newblock Bien: Botanical information and ecology network.
+\newblock {\em Methods in Ecology and Evolution}.
+
+\bibitem[Maitner, 2025]{Maitner2025BIEN}
+Maitner, B. (2025).
+\newblock {\em BIEN: Tools for Accessing the Botanical Information and Ecology
+  Network Database}.
+\newblock R package version 1.2.7.
+
+\bibitem[Merow et~al., 2014]{Merow2014Maxlike}
+Merow, C., Allen, J.~M., Aiello-Lammens, M., and Silander, J.~A. (2014).
+\newblock A comparison of maxlike and maxent for modelling species
+  distributions.
+\newblock {\em Methods in Ecology and Evolution}, 5(3):215--225.
+
+\bibitem[Merow et~al., 2013]{Merow2013MaxEntGuide}
+Merow, C., Smith, M.~J., and Silander, J.~A. (2013).
+\newblock A practical guide to maxent for modeling species' distributions: what
+  it does, and why inputs and settings matter.
+\newblock {\em Ecography}, 36(10):1058--1069.
+
+\bibitem[Merow et~al., 2016]{Merow2016ExpertMaps}
+Merow, C., Wilson, A.~M., and Jetz, W. (2016).
+\newblock Integrating occurrence data and expert maps for improved species
+  range predictions.
+\newblock {\em Global Ecology and Biogeography}, 26(2):243--258.
+
+\bibitem[Pebesma, 2018]{Pebesma2018SF}
+Pebesma, E. (2018).
+\newblock Simple features for r: Standardized support for spatial vector data.
+\newblock {\em The R Journal}, 10(1):439--446.
+
+\bibitem[Wickham, 2023]{Wickham2023Stringr}
+Wickham, H. (2023).
+\newblock {\em stringr: Simple, Consistent Wrappers for Common String
+  Operations}.
+\newblock R package version 1.5.1.
+
+\bibitem[Wickham et~al., 2023]{Wickham2023Dplyr}
+Wickham, H., Fran{\c{c}}ois, R., Henry, L., M{\"u}ller, K., and Vaughan, D.
+  (2023).
+\newblock {\em dplyr: A Grammar of Data Manipulation}.
+\newblock R package version 1.1.4.
+
+\bibitem[Wieczorek et~al., 2012]{Wieczorek2012DarwinCore}
+Wieczorek, J., Bloom, D., Guralnick, R., Blum, S., D{"o}ring, M., Giovanni, R.,
+  Robertson, T., and Vieglais, D. (2012).
+\newblock Darwin core: An evolving community-developed biodiversity data
+  standard.
+\newblock {\em PLOS ONE}, 7(1):e29715.
+
+\bibitem[Xie et~al., 2024]{Xie2024DT}
+Xie, Y., Cheng, J., and Tan, X. (2024).
+\newblock {\em DT: A Wrapper of the JavaScript Library 'DataTables'}.
+\newblock R package version 0.33.
+
+\end{thebibliography}

@@ -1,0 +1,4 @@
+data_tier,species_key,species_name,occurrence_rows,trait_rows,range_rows,map_cap_test,min_mappable_points,min_observation_categories
+low,abies_bracteata,Abies bracteata,92,9,1,80,60,2
+medium,pinus_ponderosa,Pinus ponderosa,2500,1500,1,800,700,1
+high,populus_tremuloides,Populus tremuloides,10000,3000,1,800,700,1

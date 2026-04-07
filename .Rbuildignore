@@ -1,0 +1,16 @@
+^\.git$
+^agents$
+^manuscript$
+^rsconnect$
+^tests$
+^test_misspelling\.R$
+^CODE_WORKFLOW_DOCUMENTATION\.md$
+^chat_provenance_log\.md$
+^app\.R$
+^bien\.png$
+^sample_data$
+^www$
+^.*\.shp$
+^.*\.shx$
+^.*\.dbf$
+^.*\.prj$

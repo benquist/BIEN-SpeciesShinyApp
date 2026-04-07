@@ -11,7 +11,7 @@ Interactive Shiny app for species-level biodiversity exploration using the BIEN 
 > **You can use the app right now without installing anything:**
 > **[https://benquist.shinyapps.io/bien-species-shinyapp/](https://benquist.shinyapps.io/bien-species-shinyapp/)**
 
-To run it locally instead, see the [Install and run from GitHub](#install-and-run-from-github) section below.
+To run it locally instead, see the [Install and run (R package)](#install-and-run-r-package) section below.
 
 ## Overview
 
@@ -194,77 +194,67 @@ R packages used by the app:
 
 The app auto-installs missing CRAN packages on startup.
 
-## Install and run from GitHub
+## Install and run (R package)
 
-These steps are written for a collaborator who receives the GitHub repo link and wants to run the app locally.
-
-### 1. Install prerequisites
-
-Make sure the following are installed first:
-
-- **Git** — check with `git --version`
-- **R** — download from [CRAN](https://cran.r-project.org/)
-- **Optional:** RStudio for a point-and-click way to run the app
-
-On macOS, if package installation later fails for `sf`, it can help to run:
-
-```bash
-xcode-select --install
-```
-
-### 2. Clone the GitHub repository
-
-```bash
-git clone https://github.com/benquist/BIEN-SpeciesShinyApp.git
-cd BIEN-SpeciesShinyApp
-```
-
-### 3. Run the app from Terminal
-
-From the cloned repo folder, run:
-
-```bash
-Rscript -e 'shiny::runApp(".")'
-```
-
-If `Rscript` is not found on your system, try one of these macOS variants:
-
-```bash
-/usr/local/bin/Rscript -e 'shiny::runApp(".")'
-```
-
-or
-
-```bash
-/opt/homebrew/bin/Rscript -e 'shiny::runApp(".")'
-```
-
-### 4. Run the app from R or RStudio
+The app is packaged so collaborators can install and launch it with two R commands:
 
 ```r
-setwd("BIEN-SpeciesShinyApp")
-shiny::runApp(".")
+install.packages("BIENSpeciesShinyApp_0.1.0.tar.gz", repos = NULL, type = "source")
+BIENSpeciesShinyApp::runApp()
 ```
 
-### 5. What to expect on first launch
+### Build the source package tarball (maintainer step)
 
-- The app will automatically install any missing CRAN packages it needs.
-- The first launch may take a little longer while packages are installed.
-- Once running, Shiny will print a local address such as `http://127.0.0.1:xxxx` in the console.
-- Open that address in a browser if it does not open automatically.
-- Stop the app at any time with `Ctrl+C` in Terminal.
-
-### 6. If you are running it from this larger monorepo instead
-
-If the app is being run from the broader `biodiversity-agents-lab` workspace rather than the dedicated app repo, use:
+From the app root:
 
 ```bash
-Rscript -e 'shiny::runApp("BIEN-SpeciesShinyApp")'
+R CMD build .
 ```
 
-### Troubleshooting
+This creates a file like `BIENSpeciesShinyApp_0.1.0.tar.gz`, which users install with `install.packages()`.
 
-- If the shell shows a continuation prompt (`>`), press `Ctrl+C` and re-paste only the command itself.
+### First launch notes
+
+- The app auto-installs missing CRAN dependencies it needs at runtime.
+- First launch may take longer while those dependencies are installed.
+- `BIENSpeciesShinyApp::runApp()` starts the bundled app directly from the installed package.
+
+## Automated regression tests
+
+This repo includes a deterministic regression suite that checks core app features against known baseline snapshots for three species with very different data volumes:
+
+- `Abies bracteata` (low)
+- `Pinus ponderosa` (medium)
+- `Populus tremuloides` (high)
+
+Run the suite from the app root:
+
+```bash
+Rscript tests/run_app_regression_tests.R
+```
+
+The suite verifies:
+
+- baseline row counts for occurrence/trait/range snapshots
+- occurrence categorization, source summaries, and coordinate QA outputs
+- map-cap sampling behavior across strategies
+- trait numeric parsing and trait summary generation
+- range-table handling and downloaded shapefile loading
+- reconciliation-table construction and helper-function behavior
+
+If you intentionally refresh the `sample_data/*.csv` snapshots, regenerate the baseline manifest before re-running tests:
+
+```bash
+Rscript tests/update_species_baseline.R
+```
+
+### Copilot subagent
+
+An explicit test subagent prompt is provided at `agents/test-agent.md`.
+Persistent always-rule enforcement is provided at `agents/always-agent.md` with rules stored in `agents/always-rules.md`.
+
+- Trigger it with `@test` to run `tests/run_app_regression_tests.R` and report pass/fail.
+- Trigger `@always` to record new instructions flagged as always, enforce active always-rules on the current prompt, and rerun required checks when needed.
 - If `Rscript: command not found` appears, install R and try the full path version above.
 - If package installation for `sf` fails on macOS, install the Apple command line tools first and then retry.
 - If BIEN returns a temporary connection-capacity error, use **`Retry BIEN connection (with backoff)`** to automatically retry a few times before running another manual query.
