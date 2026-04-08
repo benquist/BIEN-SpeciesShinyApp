@@ -138,3 +138,8 @@
 - Fix: Updated Lucky button to set query_timeout = 75 seconds. Parse check PASS. Deployed to shinyapps.io commit 74c0d08. App HTTP 200 confirmed.
 - Files changed: app.R; rsconnect/shinyapps.io/benquist/bien-species-shinyapp.dcf; agents/prompt_log.md
 - Completed by: GitHub Copilot
+
+- Date: 2026-04-08
+- Prompt summary: User asked to check collaborator GitHub update, rebuild/launch the new app, and preserve the latest temporal-distribution build.
+- Requested outcomes: (1) Fetch and inspect collaborator update; (2) rebuild and launch updated Shiny app; (3) preserve existing temporal distribution tab and latest behavior.
+- Result: Fetched origin/main and fast-forwarded to collaborator commit 43c6f17. Created safety backups before pull (tag: backup-temporal-build-2026-04-08, branch: backup/temporal-build-2026-04-08) and stashed untracked local diagnostics. Verified collaborator update removed temporal tab, then restored temporal feature in updated codebase (added ggplot2 dependency, temporal helper functions, Temporal Distribution tab UI, server outputs). Synced root app and package app (app.R and inst/app/app.R), rebuilt package via R CMD INSTALL, and launched via BIENSpeciesShinyApp::runApp() on localhost with HTTP 200.

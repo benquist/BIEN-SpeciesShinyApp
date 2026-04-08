@@ -1,6 +1,6 @@
 # Load required packages, installing any missing CRAN dependencies on startup.
 suppressPackageStartupMessages({
-  required_packages <- c("shiny", "BIEN", "dplyr", "stringr", "leaflet", "DT", "sf")
+  required_packages <- c("shiny", "BIEN", "dplyr", "stringr", "leaflet", "DT", "sf", "ggplot2")
   missing_packages <- required_packages[!vapply(required_packages, requireNamespace, logical(1), quietly = TRUE)]
   if (length(missing_packages) > 0) {
     stop(
@@ -19,6 +19,7 @@ suppressPackageStartupMessages({
   library(leaflet)
   library(DT)
   library(sf)
+  library(ggplot2)
 })
 
 # Wrap BIEN calls in a timeout-aware `tryCatch` so slow API responses do not lock up the app.
@@ -1181,6 +1182,74 @@ STARTUP_SPECIES <- "Pinus ponderosa"
 STARTUP_SPECIES_SLUG <- gsub("\\s+", "_", tolower(STARTUP_SPECIES))
 STARTUP_CACHE_KEY <- paste0("startup_preloaded_", STARTUP_SPECIES_SLUG)
 
+parse_collection_year <- function(date_str) {
+  if (is.null(date_str) || is.na(date_str) || !nzchar(as.character(date_str))) {
+    return(NA_integer_)
+  }
+  suppressWarnings(as.integer(substr(as.character(date_str), 1, 4)))
+}
+
+bin_temporal_data <- function(occ_df, year_min = 1700, year_max = NULL) {
+  if (!is.data.frame(occ_df) || nrow(occ_df) == 0 || !"date_collected" %in% names(occ_df)) {
+    return(NULL)
+  }
+
+  if (!"observation_category" %in% names(occ_df)) {
+    occ_df <- categorize_observation_records(occ_df)
+  }
+
+  occ_df$collection_year <- vapply(occ_df$date_collected, parse_collection_year, integer(1))
+  occ_valid <- occ_df[!is.na(occ_df$collection_year), , drop = FALSE]
+  if (nrow(occ_valid) == 0) {
+    return(NULL)
+  }
+
+  if (is.null(year_max)) {
+    year_max <- max(occ_valid$collection_year, na.rm = TRUE)
+  }
+
+  occ_valid <- occ_valid[
+    occ_valid$collection_year >= year_min & occ_valid$collection_year <= year_max,
+    ,
+    drop = FALSE
+  ]
+  if (nrow(occ_valid) == 0) {
+    return(NULL)
+  }
+
+  occ_valid$decade_bin <- as.integer(floor(occ_valid$collection_year / 10) * 10)
+
+  occ_valid %>%
+    group_by(decade_bin, observation_category) %>%
+    summarise(count = n(), .groups = "drop") %>%
+    arrange(decade_bin, observation_category)
+}
+
+summarize_temporal_stats <- function(occ_df) {
+  if (!is.data.frame(occ_df) || nrow(occ_df) == 0 || !"date_collected" %in% names(occ_df)) {
+    return(list(total_records = if (is.data.frame(occ_df)) nrow(occ_df) else 0, records_with_dates = 0, earliest_year = NA_integer_, latest_year = NA_integer_, median_year = NA_integer_, span_years = NA_integer_))
+  }
+
+  years_valid <- vapply(occ_df$date_collected, parse_collection_year, integer(1))
+  years_valid <- years_valid[!is.na(years_valid)]
+
+  if (length(years_valid) == 0) {
+    return(list(total_records = nrow(occ_df), records_with_dates = 0, earliest_year = NA_integer_, latest_year = NA_integer_, median_year = NA_integer_, span_years = NA_integer_))
+  }
+
+  earliest <- min(years_valid, na.rm = TRUE)
+  latest <- max(years_valid, na.rm = TRUE)
+
+  list(
+    total_records = nrow(occ_df),
+    records_with_dates = length(years_valid),
+    earliest_year = earliest,
+    latest_year = latest,
+    median_year = as.integer(stats::median(years_valid, na.rm = TRUE)),
+    span_years = as.integer(latest - earliest)
+  )
+}
+
 # Main Shiny user interface: query controls plus linked tabs for occurrence, trait, and range evidence.
 ui <- fluidPage(
   tags$head(
@@ -1611,6 +1680,41 @@ ui <- fluidPage(
           actionButton("load_summary_counts", "Load BIEN total counts and source mix (slower)", class = "btn-default btn-sm"),
           br(), br(),
           htmlOutput("query_summary")
+        ),
+        tabPanel(
+          "Temporal Distribution",
+          br(),
+          tags$p(
+            style = "color:#555;max-width:900px;",
+            "Ten-year histogram of occurrence records by collection year and observation category. This is client-side only and does not trigger extra BIEN queries."
+          ),
+          fluidRow(
+            column(
+              3,
+              tags$div(
+                style = "background:#f9f9f9;padding:12px;border-radius:6px;",
+                tags$h5(style = "margin-top:0;", "Temporal stats"),
+                htmlOutput("temporal_stats"),
+                br(),
+                tags$h5(style = "margin-top:8px;", "Year range filter"),
+                sliderInput(
+                  "temporal_year_range",
+                  "Filter by collection year",
+                  min = 1700,
+                  max = 2030,
+                  value = c(1700, 2030),
+                  step = 10
+                )
+              )
+            ),
+            column(9, plotOutput("temporal_histogram", height = 500))
+          ),
+          br(),
+          tags$div(
+            style = "font-size:0.9em;color:#666;background:#f0f4f8;padding:10px;border-radius:4px;",
+            tags$strong("Note: "),
+            "Rows without ", tags$code("date_collected"), " are excluded from this histogram but remain available in the observation table."
+          )
         ),
         tabPanel(
           "Observations",
@@ -3394,6 +3498,71 @@ server <- function(input, output, session) {
     res <- bien_results()
     bundle <- get_plot_community_bundle(res)
     summarize_plot_community(bundle$raw, bundle$prepared)
+  })
+
+  output$temporal_stats <- renderUI({
+    res <- bien_results()
+    stats <- summarize_temporal_stats(res$occurrences)
+    pct_with_dates <- if (stats$total_records > 0) round(100 * stats$records_with_dates / stats$total_records, 1) else 0
+
+    HTML(paste(
+      sprintf("Total records: <strong>%,d</strong>", stats$total_records),
+      sprintf("With dates: <strong>%d (%.1f%%)</strong>", stats$records_with_dates, pct_with_dates),
+      if (!is.na(stats$earliest_year)) sprintf("Earliest: <strong>%d</strong>", stats$earliest_year) else "",
+      if (!is.na(stats$latest_year)) sprintf("Latest: <strong>%d</strong>", stats$latest_year) else "",
+      if (!is.na(stats$span_years)) sprintf("Span: <strong>%d years</strong>", stats$span_years) else "",
+      if (!is.na(stats$median_year)) sprintf("Median year: <strong>%d</strong>", stats$median_year) else "",
+      sep = "<br>"
+    ))
+  })
+
+  output$temporal_histogram <- renderPlot({
+    res <- bien_results()
+    if (!is.data.frame(res$occurrences) || nrow(res$occurrences) == 0) {
+      plot.new()
+      text(0.5, 0.5, "No occurrence records available for temporal plotting.", cex = 1.1)
+      return(invisible(NULL))
+    }
+
+    year_range <- input$temporal_year_range
+    year_min <- if (!is.null(year_range) && length(year_range) == 2) year_range[1] else 1700
+    year_max <- if (!is.null(year_range) && length(year_range) == 2) year_range[2] else 2030
+
+    temporal_df <- bin_temporal_data(res$occurrences, year_min = year_min, year_max = year_max)
+    if (is.null(temporal_df) || nrow(temporal_df) == 0) {
+      plot.new()
+      text(0.5, 0.55, "No dated records in the selected year range.", cex = 1.1)
+      text(0.5, 0.43, "Try widening the year filter or checking a different species.", cex = 0.95)
+      return(invisible(NULL))
+    }
+
+    category_colors <- c(
+      "Specimen / herbarium" = "#8B4513",
+      "Plot / survey" = "#2E7D32",
+      "Citizen science (iNaturalist)" = "#F57C00",
+      "Field observation (HumanObservation)" = "#1976D2",
+      "GBIF / other aggregator" = "#7B1FA2",
+      "Other / unknown" = "#757575"
+    )
+
+    ggplot(temporal_df, aes(x = decade_bin, y = count, fill = observation_category)) +
+      geom_col(position = "stack", width = 8) +
+      scale_fill_manual(values = category_colors, name = "Observation Category", drop = FALSE) +
+      labs(
+        title = paste0(res$species, " - Observations by Decade"),
+        x = "Collection Year (decade)",
+        y = "Number of Records"
+      ) +
+      scale_x_continuous(
+        breaks = seq(floor(year_min / 10) * 10, ceiling(year_max / 10) * 10, by = 20),
+        labels = function(x) paste0(x, "s")
+      ) +
+      theme_minimal() +
+      theme(
+        axis.text.x = element_text(angle = 45, hjust = 1),
+        legend.position = "right",
+        panel.grid.minor = element_blank()
+      )
   })
 
   # Summarize the currently selected biological filters in plain language so users
