@@ -327,32 +327,59 @@ query_occurrence_with_fallback <- function(species_name, input, occ_limit, occ_p
 }
 
 
-find_lucky_species_with_mappable_points <- function(input, min_mappable_points = 30, max_attempts = 3, timeout_sec = 12) {
-  # Use a curated pool, but only return species with a verified BIEN range artifact.
-  lucky_pool <- c(
-    "Acer negundo", "Quercus alba", "Pinus ponderosa", "Picea glauca", "Betula papyrifera",
-    "Populus tremuloides", "Salix nigra", "Artemisia tridentata", "Eschscholzia californica", "Lupinus arboreus",
-    "Ambrosia artemisiifolia", "Solidago canadensis", "Asclepias syriaca", "Helianthus annuus", "Taraxacum officinale",
-    "Trifolium repens", "Poa pratensis", "Festuca arundinacea", "Muhlenbergia rigens", "Bouteloua gracilis",
-    "Opuntia ficus-indica", "Carnegiea gigantea", "Larrea tridentata", "Prosopis glandulosa", "Juniperus virginiana",
-    "Sequoia sempervirens", "Tsuga heterophylla", "Abies concolor", "Vaccinium corymbosum", "Prunus serotina"
+find_lucky_species_with_mappable_points <- function(input, min_mappable_points = 30, max_attempts = 3, timeout_sec = 12, min_observations = 10) {
+  starter_pool <- c(
+    "Chimarrhis hookeri",
+    "Cedrela angustifolia",
+    "Hevea brasiliensis",
+    "Clusia alata",
+    "Annona montana",
+    "Bunchosia armeniaca",
+    "Guatteria excelsa",
+    "Miconia calophylla",
+    "Ficus pallida"
   )
 
-  current_species <- normalize_species_name(if (is.null(input$species)) "" else as.character(input$species))
-  available <- unique(lucky_pool)
-  if (nzchar(current_species)) {
-    available <- available[tolower(available) != tolower(current_species)]
+  fetch_random_bien_species_pool <- function(min_observations = 10, pool_size = 180, timeout_sec = 12) {
+    query <- paste(
+      "SELECT scrubbed_species_binomial, COUNT(*) AS bien_total_records",
+      "FROM view_full_occurrence_individual",
+      "WHERE scrubbed_species_binomial IS NOT NULL",
+      "AND higher_plant_group NOT IN ('Algae','Bacteria','Fungi')",
+      "AND lower(coalesce(observation_type, '')) NOT LIKE '%trait%'",
+      "AND lower(coalesce(observation_type, '')) NOT LIKE '%measurement%'",
+      "GROUP BY scrubbed_species_binomial",
+      "HAVING COUNT(*) >=", as.integer(min_observations),
+      "ORDER BY random()",
+      "LIMIT", as.integer(pool_size), ";"
+    )
+
+    res <- safe_bien_call(
+      BIEN:::.BIEN_sql(query, fetch.query = FALSE),
+      timeout_sec = min(15, max(8, as.numeric(timeout_sec)))
+    )
+
+    if (inherits(res, "error") || !is.data.frame(res) || nrow(res) == 0) {
+      return(data.frame(species = character(0), n_obs = numeric(0), stringsAsFactors = FALSE))
+    }
+
+    species_col <- find_first_col(res, c("scrubbed_species_binomial", "species"))
+    count_col <- find_first_col(res, c("bien_total_records", "count"))
+    if (is.null(species_col)) {
+      return(data.frame(species = character(0), n_obs = numeric(0), stringsAsFactors = FALSE))
+    }
+
+    out <- data.frame(
+      species = as.character(res[[species_col]]),
+      n_obs = if (!is.null(count_col)) suppressWarnings(as.numeric(res[[count_col]])) else NA_real_,
+      stringsAsFactors = FALSE
+    )
+    out <- out[!is.na(out$species) & nzchar(out$species), , drop = FALSE]
+    out <- out[!duplicated(tolower(out$species)), , drop = FALSE]
+    out
   }
 
-  if (length(available) == 0) {
-    return(list(status = "not_found", species = NULL, mappable_n = NA_integer_, attempts = 0, precheck = "none"))
-  }
-
-  attempts_cap <- min(length(available), max(1L, as.integer(max_attempts)))
-  candidates <- sample(available, size = attempts_cap, replace = FALSE)
-
-  for (i in seq_along(candidates)) {
-    candidate <- candidates[[i]]
+  has_verified_range <- function(candidate) {
     candidate_dir <- file.path(tempdir(), "bien_lucky_ranges", gsub("\\s+", "_", candidate))
     dir.create(candidate_dir, recursive = TRUE, showWarnings = FALSE)
 
@@ -371,12 +398,64 @@ find_lucky_species_with_mappable_points <- function(input, min_mappable_points =
     )
     downloaded_range_sf <- read_downloaded_range_sf(candidate_dir, candidate)
 
-    has_range <- (is.data.frame(range_obj) && nrow(range_obj) > 0) ||
+    (is.data.frame(range_obj) && nrow(range_obj) > 0) ||
       (inherits(range_obj, "sf") && nrow(range_obj) > 0) ||
       (inherits(downloaded_range_sf, "sf") && nrow(downloaded_range_sf) > 0)
+  }
 
-    if (isTRUE(has_range)) {
-      return(list(status = "ok", species = candidate, mappable_n = NA_integer_, attempts = i, precheck = "curated_pool_range_verified"))
+  current_species <- normalize_species_name(if (is.null(input$species)) "" else as.character(input$species))
+  norm_name <- function(x) normalize_species_name(gsub("\\s*\\(.*\\)\\s*$", "", as.character(x)))
+
+  starter_pool <- unique(vapply(starter_pool, norm_name, FUN.VALUE = character(1)))
+  if (nzchar(current_species)) {
+    starter_pool <- starter_pool[tolower(starter_pool) != tolower(current_species)]
+  }
+
+  if (length(starter_pool) > 0) {
+    starter_candidates <- sample(starter_pool, size = length(starter_pool), replace = FALSE)
+    for (i in seq_along(starter_candidates)) {
+      candidate <- starter_candidates[[i]]
+      total_info <- count_occurrence_records(
+        species_name = candidate,
+        cultivated = FALSE,
+        natives_only = TRUE,
+        only_geovalid = TRUE,
+        timeout_sec = min(12, max(8, as.numeric(timeout_sec)))
+      )
+      total_n <- suppressWarnings(as.numeric(total_info$total))
+
+      if (!is.na(total_n) && total_n >= as.numeric(min_observations) && isTRUE(has_verified_range(candidate))) {
+        return(list(status = "ok", species = candidate, mappable_n = NA_integer_, attempts = i, precheck = "starter_pool_range_verified"))
+      }
+    }
+  }
+
+  random_pool <- fetch_random_bien_species_pool(
+    min_observations = min_observations,
+    pool_size = max(120, 20 * max(1L, as.integer(max_attempts))),
+    timeout_sec = timeout_sec
+  )
+
+  if (!is.data.frame(random_pool) || nrow(random_pool) == 0) {
+    return(list(status = "not_found", species = NULL, mappable_n = NA_integer_, attempts = 0, precheck = "no_random_pool"))
+  }
+
+  if (nzchar(current_species)) {
+    random_pool <- random_pool[tolower(random_pool$species) != tolower(current_species), , drop = FALSE]
+  }
+  if (nrow(random_pool) == 0) {
+    return(list(status = "not_found", species = NULL, mappable_n = NA_integer_, attempts = 0, precheck = "random_pool_exhausted"))
+  }
+
+  attempts_cap <- min(nrow(random_pool), max(1L, as.integer(max_attempts)))
+  pick_order <- sample(seq_len(nrow(random_pool)), size = attempts_cap, replace = FALSE)
+  for (j in seq_along(pick_order)) {
+    row_idx <- pick_order[[j]]
+    candidate <- as.character(random_pool$species[[row_idx]])
+    n_obs <- suppressWarnings(as.numeric(random_pool$n_obs[[row_idx]]))
+
+    if (!is.na(n_obs) && n_obs >= as.numeric(min_observations) && isTRUE(has_verified_range(candidate))) {
+      return(list(status = "ok", species = candidate, mappable_n = NA_integer_, attempts = j, precheck = "bien_random_pool_range_verified"))
     }
   }
 
