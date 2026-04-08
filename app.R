@@ -1672,6 +1672,7 @@ ui <- fluidPage(
           leafletOutput("occurrence_map", height = 550),
           br(),
           uiOutput("overview_notice"),
+          uiOutput("slow_query_alert"),
           br(),
           tags$p(
             style = "color:#555;max-width:900px;",
@@ -2515,6 +2516,23 @@ server <- function(input, output, session) {
     bien_results_live()
   })
 
+  observeEvent(bien_results_live(), {
+    res <- bien_results_live()
+    elapsed <- suppressWarnings(as.numeric(res$query_elapsed_sec))
+    if (isTRUE(res$cache_hit) || is.na(elapsed) || elapsed < 25) {
+      return(NULL)
+    }
+
+    showNotification(
+      paste0(
+        "This query took ", elapsed, " seconds. For faster screening, keep Fast mode on, reduce sample limits, ",
+        "or temporarily relax strict filters (native/geovalid)."
+      ),
+      type = "warning",
+      duration = 10
+    )
+  }, ignoreInit = TRUE)
+
   observeEvent(input$apply_name_suggestion, {
     res <- bien_results()
     suggestion <- res$name_suggestion
@@ -3325,6 +3343,47 @@ server <- function(input, output, session) {
     }
 
     NULL
+  })
+
+  output$slow_query_alert <- renderUI({
+    res <- bien_results()
+    elapsed <- suppressWarnings(as.numeric(res$query_elapsed_sec))
+    if (isTRUE(res$cache_hit) || is.na(elapsed) || elapsed < 25) {
+      return(NULL)
+    }
+
+    reasons <- c()
+    if (isTRUE(res$only_geovalid)) {
+      reasons <- c(reasons, "geovalid-only filtering")
+    }
+    if (isTRUE(res$use_introduced_filter) && isTRUE(res$natives_only)) {
+      reasons <- c(reasons, "native-only filtering")
+    }
+    if (!is.null(res$occ_limit) && is.finite(res$occ_limit) && res$occ_limit >= 1000) {
+      reasons <- c(reasons, paste0("large app sample request (", res$occ_limit, " rows)"))
+    }
+    if (identical(res$occ_strategy, "fallback_relaxed_native") || identical(res$occ_strategy, "fallback_relaxed_geo")) {
+      reasons <- c(reasons, "fallback retries after strict query")
+    }
+    if (length(res$query_errors) > 0 && any(grepl("elapsed time limit|timeout", res$query_errors, ignore.case = TRUE))) {
+      reasons <- c(reasons, "BIEN backend timeout/retry behavior")
+    }
+    reasons <- unique(reasons)
+    reason_txt <- if (length(reasons) > 0) paste(reasons, collapse = "; ") else "BIEN backend load and query complexity"
+
+    tags$div(
+      style = "background:#fff3cd;border:1px solid #ffe69c;color:#664d03;padding:10px 12px;border-radius:6px;margin:8px 0;",
+      tags$strong("Slow query notice: "),
+      paste0("This run took ", elapsed, " seconds for ", res$species, "."),
+      tags$br(),
+      tags$strong("Likely cause: "), reason_txt,
+      tags$br(),
+      tags$strong("Speed-up options: "),
+      "keep Fast mode for large species enabled, reduce occurrence/map limits, or relax strict native/geovalid filters for initial preview.",
+      tags$br(),
+      tags$strong("Good news: "),
+      "you can still explore the returned sample now and load optional BIEN totals later with the summary button."
+    )
   })
 
   output$occurrence_map <- renderLeaflet({
