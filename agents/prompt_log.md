@@ -143,3 +143,11 @@
 - Prompt summary: User asked to check collaborator GitHub update, rebuild/launch the new app, and preserve the latest temporal-distribution build.
 - Requested outcomes: (1) Fetch and inspect collaborator update; (2) rebuild and launch updated Shiny app; (3) preserve existing temporal distribution tab and latest behavior.
 - Result: Fetched origin/main and fast-forwarded to collaborator commit 43c6f17. Created safety backups before pull (tag: backup-temporal-build-2026-04-08, branch: backup/temporal-build-2026-04-08) and stashed untracked local diagnostics. Verified collaborator update removed temporal tab, then restored temporal feature in updated codebase (added ggplot2 dependency, temporal helper functions, Temporal Distribution tab UI, server outputs). Synced root app and package app (app.R and inst/app/app.R), rebuilt package via R CMD INSTALL, and launched via BIENSpeciesShinyApp::runApp() on localhost with HTTP 200.
+
+- Date: 2026-04-08
+- Prompt summary: User asked to push the new Shiny app to development and update GitHub.
+- Prompt text (exact): "great push the new shiny app to development. update github"
+- Requested outcomes: Deploy current BIEN app build to shinyapps.io development endpoint and push corresponding update(s) to GitHub.
+- Result: Deployed current main branch build via deploy_safe.R to shinyapps.io (application: bien-species-shinyapp). Deployment completed successfully with upload bundle id 11819845 and task id 1675353737. Post-deploy health check returned HTTP 200. Prepared GitHub update to include deployment metadata and prompt log entry while preserving local untracked diagnostics scripts.
+- Files changed: rsconnect/shinyapps.io/benquist/bien-species-shinyapp.dcf; agents/prompt_log.md
+- Completed by: GitHub Copilot
