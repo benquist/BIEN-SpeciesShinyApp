@@ -2704,26 +2704,32 @@ server <- function(input, output, session) {
   })
 
   output$species_external_links <- renderUI({
-    species_name <- str_squish(input$species)
+    res <- bien_results()
+    species_name <- if (!is.null(res$species) && nzchar(res$species)) {
+      res$species
+    } else {
+      str_squish(input$species)
+    }
     if (!nzchar(species_name)) {
-      species_name <- "Pinus ponderosa"
+      species_name <- STARTUP_SPECIES
     }
     species_name <- normalize_species_name(species_name)
+    is_startup_species <- identical(species_name, STARTUP_SPECIES)
     species_slug <- gsub("\\s+", "_", species_name)
     species_query <- utils::URLencode(species_name, reserved = TRUE)
 
     wikipedia_url <- paste0("https://en.wikipedia.org/wiki/", species_slug)
-    powo_url <- if (identical(species_name, "Pinus ponderosa")) {
+    powo_url <- if (is_startup_species) {
       "https://powo.science.kew.org/taxon/urn:lsid:ipni.org:names:77170930-1"
     } else {
       paste0("https://powo.science.kew.org/results?q=", species_query)
     }
-    mbg_url <- if (identical(species_name, "Pinus ponderosa")) {
+    mbg_url <- if (is_startup_species) {
       "https://www.missouribotanicalgarden.org/PlantFinder/PlantFinderDetails.aspx?taxonid=285000"
     } else {
       paste0("https://www.tropicos.org/name/Search?name=", species_query)
     }
-    plant_list_url <- if (identical(species_name, "Pinus ponderosa")) {
+    plant_list_url <- if (is_startup_species) {
       "http://www.theplantlist.org/tpl1.1/record/kew-2562565"
     } else {
       paste0("http://www.theplantlist.org/tpl1.1/search?q=", species_query)
@@ -2740,19 +2746,40 @@ server <- function(input, output, session) {
       tags$div(
         class = "bien-link-card",
         tags$strong("Plants of the World Online (Kew)"),
-        tags$p(style = "margin:6px 0 8px 0;color:#444;font-size:0.92em;", "Direct taxon link for Pinus ponderosa; otherwise species search results."),
+        tags$p(
+          style = "margin:6px 0 8px 0;color:#444;font-size:0.92em;",
+          if (is_startup_species) {
+            paste0("Direct taxon link for ", species_name, "; otherwise species search results.")
+          } else {
+            paste0("Species search results generated for: ", species_name)
+          }
+        ),
         tags$a("Open POWO", href = powo_url, target = "_blank", class = "btn btn-default btn-sm")
       ),
       tags$div(
         class = "bien-link-card",
         tags$strong("Missouri Botanical Garden"),
-        tags$p(style = "margin:6px 0 8px 0;color:#444;font-size:0.92em;", "Direct Plant Finder detail for Pinus ponderosa; otherwise Tropicos (Missouri Botanical Garden) name search."),
+        tags$p(
+          style = "margin:6px 0 8px 0;color:#444;font-size:0.92em;",
+          if (is_startup_species) {
+            paste0("Direct Plant Finder detail for ", species_name, "; otherwise Tropicos (Missouri Botanical Garden) name search.")
+          } else {
+            paste0("Tropicos name search generated for: ", species_name)
+          }
+        ),
         tags$a("Open Missouri Botanical Garden", href = mbg_url, target = "_blank", class = "btn btn-default btn-sm")
       ),
       tags$div(
         class = "bien-link-card",
         tags$strong("The Plant List"),
-        tags$p(style = "margin:6px 0 8px 0;color:#444;font-size:0.92em;", "Direct record link for Pinus ponderosa; otherwise species search."),
+        tags$p(
+          style = "margin:6px 0 8px 0;color:#444;font-size:0.92em;",
+          if (is_startup_species) {
+            paste0("Direct record link for ", species_name, "; otherwise species search.")
+          } else {
+            paste0("Species search generated for: ", species_name)
+          }
+        ),
         tags$a("Open The Plant List", href = plant_list_url, target = "_blank", class = "btn btn-default btn-sm")
       )
     )
