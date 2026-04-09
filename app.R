@@ -412,7 +412,16 @@ find_lucky_species_with_mappable_points <- function(input, min_mappable_points =
     "Bunchosia armeniaca",
     "Guatteria excelsa",
     "Miconia calophylla",
-    "Ficus pallida"
+    "Ficus pallida",
+    "Capparis micracantha",
+    "Clappertonia ficifolia",
+    "Dacryodes costata",
+    "Ilex cymosa",
+    "Lasianthus attenuatus",
+    "Ochrosia elliptica",
+    "Popowia pisocarpa",
+    "Quassia indica",
+    "Aquilegia coerulea"
   )
 
   fetch_random_bien_species_pool <- function(min_observations = 10, pool_size = 180, timeout_sec = 12) {

@@ -101,3 +101,8 @@ Outcome: Added a cached AsianPlant species-index lookup from asianplant.net/Spec
 
 ## Update Rule
 Append a new entry whenever prompts lead to created/modified app code, BIEN query logic, or documentation under BIEN Shiny App/.
+
+20. Date: 2026-04-09
+Prompt: Add more species to the random species select list (Capparis micracantha, Clappertonia ficifolia, Dacryodes costata, Ilex cymosa, Lasianthus attenuatus, Ochrosia elliptica, Popowia pisocarpa, Quassia indica, Aquilegia coerulea).
+Source session: current workspace session
+Outcome: Appended nine new species to the curated random-species starter pool used by the random species button.
