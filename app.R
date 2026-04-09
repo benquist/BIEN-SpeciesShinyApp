@@ -2808,11 +2808,7 @@ server <- function(input, output, session) {
     } else {
       paste0("https://www.tropicos.org/name/Search?name=", species_query)
     }
-    plant_list_url <- if (is_startup_species) {
-      "http://www.theplantlist.org/tpl1.1/record/kew-2562565"
-    } else {
-      paste0("http://www.theplantlist.org/tpl1.1/search?q=", species_query)
-    }
+    world_flora_url <- paste0("https://www.worldfloraonline.org/search?query=", species_query)
 
     tags$div(
       style = "display:flex;flex-direction:column;gap:12px;max-width:900px;",
@@ -2850,16 +2846,12 @@ server <- function(input, output, session) {
       ),
       tags$div(
         class = "bien-link-card",
-        tags$strong("The Plant List"),
+        tags$strong("World Flora Online"),
         tags$p(
           style = "margin:6px 0 8px 0;color:#444;font-size:0.92em;",
-          if (is_startup_species) {
-            paste0("Direct record link for ", species_name, "; otherwise species search.")
-          } else {
-            paste0("Species search generated for: ", species_name)
-          }
+          paste0("Species search generated for: ", species_name, ". This replaces The Plant List, which is no longer reliably reachable.")
         ),
-        tags$a("Open The Plant List", href = plant_list_url, target = "_blank", class = "btn btn-default btn-sm")
+        tags$a("Open World Flora Online", href = world_flora_url, target = "_blank", class = "btn btn-default btn-sm")
       )
     )
   })
