@@ -64,5 +64,40 @@ Prompt: Confirm whether BIEN is truly down versus an app issue, then add a retry
 Source session: current workspace session
 Outcome: Confirmed the BIEN public database connection-slot error with direct BIEN package calls outside the app UI, then added a `Retry BIEN connection (with backoff)` button and exponential-backoff retries in the occurrence query path, plus README guidance for using this retry workflow.
 
+13. Date: 2026-04-09
+Prompt: On the shiny app, for the Settings Filters toggle, the information symbol is not working on hover or click; add pertinent information for each toggle.
+Source session: current workspace session
+Outcome: Updated filter/help labels to use initialized Bootstrap tooltips and added client-side tooltip initialization so each info icon now shows its explanatory text on hover, focus, or click.
+
+14. Date: 2026-04-09
+Prompt: Yes (apply the offered wording improvements for settings tooltip text).
+Source session: current workspace session
+Outcome: Revised Settings/Filters tooltip copy to be more ecologically explicit, including clearer native/introduced, cultivated, plot-only, geovalid, and human-observation guidance.
+
+15. Date: 2026-04-09
+Prompt: Just checked the shiny app and it did not work; please check.
+Source session: current workspace session
+Outcome: Added cross-framework tooltip compatibility (Bootstrap data attributes plus framework-independent JavaScript fallback tooltip behavior) so Settings info icons work on hover/focus/click even when Bootstrap tooltip plugins are unavailable or version-mismatched, then redeployed to shinyapps.io and confirmed the app is running.
+
+16. Date: 2026-04-09
+Prompt: Looks like the shiny app is frozen.
+Source session: current workspace session
+Outcome: Diagnosed timeout logs tied to sequential BIEN COUNT prechecks in the random-species workflow, changed Lucky selection to an instant curated pick with no blocking BIEN precheck queries, and redeployed to shinyapps.io.
+
+17. Date: 2026-04-09
+Prompt: Tooltip hover info now shows two popups (white and black), and the black one does not disappear on mouse leave.
+Source session: current workspace session
+Outcome: Removed Bootstrap/native tooltip attributes and Bootstrap tooltip initialization from settings info icons so only one custom tooltip system renders and dismisses cleanly.
+
+18. Date: 2026-04-09
+Prompt: For the BIEN shiny app species external links, add a link to the species iNaturalist page in addition to other sites.
+Source session: current workspace session
+Outcome: Added an iNaturalist external-link card to the Species External Links panel, using the current species name to generate an iNaturalist taxon search URL while preserving the existing Wikipedia, POWO, Missouri Botanical Garden, and World Flora Online links.
+
+19. Date: 2026-04-09
+Prompt: Add AsianPlant.net to Species External Links, but only show the link when the queried species occurs on that site.
+Source session: current workspace session
+Outcome: Added a cached AsianPlant species-index lookup from asianplant.net/Species.htm and rendered an AsianPlant external-link card only when an exact binomial match exists for the current species.
+
 ## Update Rule
 Append a new entry whenever prompts lead to created/modified app code, BIEN query logic, or documentation under BIEN Shiny App/.

@@ -79,6 +79,81 @@ normalize_species_name <- function(x) {
   paste(parts, collapse = " ")
 }
 
+# Build a cached AsianPlant species index so we only show links when the
+# requested species is listed on asianplant.net.
+asianplant_species_index_cache <- new.env(parent = emptyenv())
+asianplant_species_index_cache$loaded <- FALSE
+asianplant_species_index_cache$index <- setNames(character(0), character(0))
+
+load_asianplant_species_index <- function(timeout_sec = 8, refresh = FALSE) {
+  if (isTRUE(asianplant_species_index_cache$loaded) && !isTRUE(refresh)) {
+    return(asianplant_species_index_cache$index)
+  }
+
+  fetch_res <- safe_bien_call(
+    readLines("https://www.asianplant.net/Species.htm", warn = FALSE, encoding = "UTF-8"),
+    timeout_sec = timeout_sec
+  )
+
+  if (inherits(fetch_res, "error") || !is.character(fetch_res) || length(fetch_res) == 0) {
+    asianplant_species_index_cache$loaded <- TRUE
+    asianplant_species_index_cache$index <- setNames(character(0), character(0))
+    return(asianplant_species_index_cache$index)
+  }
+
+  html_txt <- paste(fetch_res, collapse = "\n")
+  link_pattern <- "<a\\s+[^>]*href\\s*=\\s*\"([^\"]+)\"[^>]*>([^<]+)</a>"
+  link_nodes <- unlist(regmatches(html_txt, gregexpr(link_pattern, html_txt, perl = TRUE)), use.names = FALSE)
+
+  if (length(link_nodes) == 0) {
+    asianplant_species_index_cache$loaded <- TRUE
+    asianplant_species_index_cache$index <- setNames(character(0), character(0))
+    return(asianplant_species_index_cache$index)
+  }
+
+  hrefs <- sub(link_pattern, "\\1", link_nodes, perl = TRUE)
+  labels <- sub(link_pattern, "\\2", link_nodes, perl = TRUE)
+  labels <- vapply(labels, normalize_species_name, character(1))
+  is_binomial <- str_detect(labels, "^[A-Z][a-z-]+\\s+[a-z-]+$")
+
+  hrefs <- hrefs[is_binomial]
+  labels <- labels[is_binomial]
+
+  hrefs <- ifelse(
+    str_detect(hrefs, "^https?://"),
+    hrefs,
+    paste0("https://www.asianplant.net/", sub("^/+", "", hrefs))
+  )
+
+  idx <- hrefs
+  names(idx) <- labels
+  idx <- idx[!duplicated(names(idx))]
+
+  asianplant_species_index_cache$loaded <- TRUE
+  asianplant_species_index_cache$index <- idx
+  idx
+}
+
+get_asianplant_species_url <- function(species_name) {
+  species_name <- normalize_species_name(species_name)
+  if (!nzchar(species_name)) {
+    return(NA_character_)
+  }
+
+  parts <- strsplit(species_name, "\\s+")[[1]]
+  if (length(parts) < 2) {
+    return(NA_character_)
+  }
+  binomial <- paste(parts[1:2], collapse = " ")
+
+  idx <- load_asianplant_species_index()
+  if (length(idx) == 0 || !(binomial %in% names(idx))) {
+    return(NA_character_)
+  }
+
+  unname(idx[[binomial]])
+}
+
 # Suggest a likely intended species spelling by searching BIEN species names within
 # the same genus and ranking by edit distance.
 find_best_species_spelling <- function(species_name, timeout_sec = 20) {
@@ -409,6 +484,12 @@ find_lucky_species_with_mappable_points <- function(input, min_mappable_points =
   starter_pool <- unique(vapply(starter_pool, norm_name, FUN.VALUE = character(1)))
   if (nzchar(current_species)) {
     starter_pool <- starter_pool[tolower(starter_pool) != tolower(current_species)]
+  }
+
+  # Keep the Lucky button non-blocking: pick immediately from a curated starter pool.
+  if (length(starter_pool) > 0) {
+    candidate <- sample(starter_pool, size = 1)
+    return(list(status = "ok", species = candidate, mappable_n = NA_integer_, attempts = 1, precheck = "starter_pool_fast_pick"))
   }
 
   if (length(starter_pool) > 0) {
@@ -1191,9 +1272,10 @@ compact_label <- function(text, tip = NULL) {
   if (is.null(tip) || !nzchar(tip)) {
     return(text)
   }
+  tip_escaped <- htmltools::htmlEscape(tip, attribute = TRUE)
   HTML(paste0(
     text,
-    " <span title=\"", htmltools::htmlEscape(tip), "\" style=\"cursor:help;color:#4c6f8a;font-weight:600;\">ⓘ</span>"
+    " <span class=\"bien-inline-tip\" role=\"button\" tabindex=\"0\" data-bien-tip=\"", tip_escaped, "\" aria-label=\"Info: ", tip_escaped, "\">&#9432;</span>"
   ))
 }
 
@@ -1457,6 +1539,30 @@ ui <- fluidPage(
         margin-bottom: 18px;
       }
       .source-bar { height: 22px; border-radius: 4px; margin-bottom: 5px; display: inline-block; }
+      .bien-inline-tip {
+        cursor: help;
+        color: #3f6582;
+        font-weight: 700;
+        margin-left: 4px;
+        border-bottom: 1px dotted #7ca0ba;
+      }
+      .bien-inline-tip:focus {
+        outline: 2px solid #7baed3;
+        outline-offset: 1px;
+      }
+      .bien-tip-bubble {
+        position: absolute;
+        z-index: 3000;
+        max-width: 320px;
+        padding: 8px 10px;
+        border-radius: 6px;
+        border: 1px solid #9fc0d8;
+        background: #f8fcff;
+        color: #1f3f57;
+        box-shadow: 0 3px 10px rgba(0, 0, 0, 0.14);
+        font-size: 0.88em;
+        line-height: 1.35;
+      }
     "))
   ),
   tags$div(
@@ -1499,6 +1605,80 @@ ui <- fluidPage(
       ),
       uiOutput("retry_bien_ui"),
       tags$script(HTML("$(document).on('keydown', '#species', function(e) { if (e.key === 'Enter') { $('#run_query').click(); return false; } });")),
+      tags$script(HTML(
+        "(function() {
+          function bindFallbackTip(el) {
+            if (!el || el.dataset.bienTipBound === '1') return;
+
+            function ensureBubble() {
+              var bubble = document.getElementById('bien-inline-tip-bubble');
+              if (!bubble) {
+                bubble = document.createElement('div');
+                bubble.id = 'bien-inline-tip-bubble';
+                bubble.className = 'bien-tip-bubble';
+                bubble.style.display = 'none';
+                document.body.appendChild(bubble);
+              }
+              return bubble;
+            }
+
+            function showBubble() {
+              var txt = el.getAttribute('data-bien-tip');
+              if (!txt) return;
+              var bubble = ensureBubble();
+              bubble.textContent = txt;
+              bubble.style.display = 'block';
+              var rect = el.getBoundingClientRect();
+              var top = window.scrollY + rect.top - 6;
+              var left = window.scrollX + rect.right + 10;
+              bubble.style.top = top + 'px';
+              bubble.style.left = left + 'px';
+            }
+
+            function hideBubble() {
+              var bubble = document.getElementById('bien-inline-tip-bubble');
+              if (bubble) bubble.style.display = 'none';
+            }
+
+            el.addEventListener('mouseenter', showBubble);
+            el.addEventListener('mouseleave', hideBubble);
+            el.addEventListener('focus', showBubble);
+            el.addEventListener('blur', hideBubble);
+            el.addEventListener('click', function(e) {
+              var bubble = document.getElementById('bien-inline-tip-bubble');
+              if (bubble && bubble.style.display === 'block') {
+                hideBubble();
+              } else {
+                showBubble();
+              }
+              e.preventDefault();
+              e.stopPropagation();
+            });
+            el.addEventListener('keydown', function(e) {
+              if (e.key === 'Escape') hideBubble();
+            });
+
+            el.dataset.bienTipBound = '1';
+          }
+
+          document.addEventListener('click', function(e) {
+            if (!e.target.closest || !e.target.closest('.bien-inline-tip')) {
+              var bubble = document.getElementById('bien-inline-tip-bubble');
+              if (bubble) bubble.style.display = 'none';
+            }
+          });
+
+          function initBienTooltips() {
+            document.querySelectorAll('.bien-inline-tip').forEach(function(el) {
+              bindFallbackTip(el);
+            });
+          }
+
+          jQuery(document).on('shiny:connected', initBienTooltips);
+          jQuery(document).on('shiny:value shiny:recalculated', initBienTooltips);
+          jQuery(initBienTooltips);
+        })();"
+      )),
       tags$div(
         style = "font-size:0.92em;color:#555;margin:6px 0 10px 0;",
         "Change filters, then click Query BIEN."
@@ -1506,22 +1686,22 @@ ui <- fluidPage(
       tags$hr(),
       tags$h4("Settings", style = "margin:0 0 8px 0;font-size:1.08em;"),
       tags$h5("Filters", style = "margin:6px 0 6px 0;font-size:0.98em;color:#444;"),
-      checkboxInput("use_default_bien_filter_profile", compact_label("Conservative default profile", "Recommended ecological screening defaults: native/not-introduced only, cultivated hidden, geovalid coordinates only."), value = TRUE),
+      checkboxInput("use_default_bien_filter_profile", compact_label("Conservative default profile", "Uses a biodiversity-conservative screen: keeps native and non-introduced records, excludes cultivated records, and keeps only BIEN geovalid coordinates."), value = TRUE),
       conditionalPanel(
         condition = "input.use_default_bien_filter_profile == false",
-        checkboxInput("use_introduced_filter", compact_label("Filter by native vs introduced", "If off, both native and introduced records are shown."), value = TRUE),
+        checkboxInput("use_introduced_filter", compact_label("Filter by native vs introduced", "Controls whether establishment status is enforced. If disabled, records are kept regardless of native or introduced status."), value = TRUE),
         conditionalPanel(
           condition = "input.use_introduced_filter == true",
-          checkboxInput("natives_only", compact_label("Keep native only", "Hide BIEN-introduced records."), value = TRUE)
+          checkboxInput("natives_only", compact_label("Keep native only", "When enabled, retains native records and excludes BIEN records marked introduced."), value = TRUE)
         ),
-        checkboxInput("use_cultivated_filter", compact_label("Filter by cultivated vs wild", "If off, both cultivated and non-cultivated records are shown."), value = TRUE),
+        checkboxInput("use_cultivated_filter", compact_label("Filter by cultivated vs wild", "Controls whether cultivation status is enforced. If disabled, both cultivated and non-cultivated records are retained."), value = TRUE),
         conditionalPanel(
           condition = "input.use_cultivated_filter == true",
-          checkboxInput("include_cultivated", compact_label("Include cultivated records", "Turn on to keep cultivated records in app outputs."), value = FALSE)
+          checkboxInput("include_cultivated", compact_label("Include cultivated records", "When disabled, ornamental or managed plantings are excluded so outputs emphasize wild occurrences."), value = FALSE)
         ),
-        checkboxInput("only_plot_observations", compact_label("Show only plot/survey records", "Keep only formal sampling records."), value = FALSE),
-        checkboxInput("only_geovalid", compact_label("Keep only BIEN geovalid coordinates", "Hide coordinates flagged as non-geovalid by BIEN."), value = TRUE),
-        checkboxInput("exclude_human_observation_records", compact_label("Exclude HumanObservation + iNaturalist", "Removes field observation and iNaturalist categories from app outputs."), value = FALSE)
+        checkboxInput("only_plot_observations", compact_label("Show only plot/survey records", "Keeps only formal plot/survey observations and drops opportunistic records (for example, casual sightings)."), value = FALSE),
+        checkboxInput("only_geovalid", compact_label("Keep only BIEN geovalid coordinates", "Excludes points BIEN flags as geospatially invalid (for example, swapped or out-of-range coordinates)."), value = TRUE),
+        checkboxInput("exclude_human_observation_records", compact_label("Exclude HumanObservation + iNaturalist", "Removes human-observed and iNaturalist-sourced records, emphasizing curated plot/herbarium-style data streams."), value = FALSE)
       ),
       tags$h5("Sampling & map", style = "margin:10px 0 6px 0;font-size:0.98em;color:#444;"),
       checkboxInput("show_sampling_settings", compact_label("Show sampling & map settings", "Turn on to customize app-sample size, map cap, and balancing strategy."), value = FALSE),
@@ -2809,6 +2989,8 @@ server <- function(input, output, session) {
       paste0("https://www.tropicos.org/name/Search?name=", species_query)
     }
     world_flora_url <- paste0("https://www.worldfloraonline.org/search?query=", species_query)
+    inaturalist_url <- paste0("https://www.inaturalist.org/taxa/search?q=", species_query)
+    asianplant_url <- get_asianplant_species_url(species_name)
 
     tags$div(
       style = "display:flex;flex-direction:column;gap:12px;max-width:900px;",
@@ -2852,7 +3034,27 @@ server <- function(input, output, session) {
           paste0("Species search generated for: ", species_name, ". This replaces The Plant List, which is no longer reliably reachable.")
         ),
         tags$a("Open World Flora Online", href = world_flora_url, target = "_blank", class = "btn btn-default btn-sm")
-      )
+      ),
+      tags$div(
+        class = "bien-link-card",
+        tags$strong("iNaturalist"),
+        tags$p(
+          style = "margin:6px 0 8px 0;color:#444;font-size:0.92em;",
+          paste0("Taxon search generated for: ", species_name)
+        ),
+        tags$a("Open iNaturalist", href = inaturalist_url, target = "_blank", class = "btn btn-default btn-sm")
+      ),
+      if (!is.na(asianplant_url) && nzchar(asianplant_url)) {
+        tags$div(
+          class = "bien-link-card",
+          tags$strong("AsianPlant.net"),
+          tags$p(
+            style = "margin:6px 0 8px 0;color:#444;font-size:0.92em;",
+            paste0("Direct species page shown only when ", species_name, " is listed in AsianPlant.")
+          ),
+          tags$a("Open AsianPlant", href = asianplant_url, target = "_blank", class = "btn btn-default btn-sm")
+        )
+      }
     )
   })
 
