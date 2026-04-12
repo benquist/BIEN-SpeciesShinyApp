@@ -106,3 +106,8 @@ Append a new entry whenever prompts lead to created/modified app code, BIEN quer
 Prompt: Add more species to the random species select list (Capparis micracantha, Clappertonia ficifolia, Dacryodes costata, Ilex cymosa, Lasianthus attenuatus, Ochrosia elliptica, Popowia pisocarpa, Quassia indica, Aquilegia coerulea).
 Source session: current workspace session
 Outcome: Appended nine new species to the curated random-species starter pool used by the random species button.
+
+21. Date: 2026-04-12
+Prompt: Update the Overview/About Occurrence Map copy to mention toggling geo-validated and native/non-native records.
+Source session: current workspace session
+Outcome: Replaced the Occurrence Map card description text with the requested wording focused on species-level records and filter toggles.

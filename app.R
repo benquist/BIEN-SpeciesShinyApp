@@ -1781,9 +1781,8 @@ ui <- fluidPage(
                   tags$span(class = "bien-feature-icon", "\U0001F5FA\uFE0F"),
                   tags$strong("Occurrence Map"),
                   tags$p(style = "font-size:0.93em;color:#444;margin-top:6px;",
-                    "Thousands of geo-validated occurrence records spanning California, Oregon, Idaho, Colorado, and northern Mexico.",
-                    " Records are colored by source class (plot surveys, herbarium specimens, iNaturalist citizen-science observations).",
-                    " The app balances the display so no single data source visually drowns out the others."
+                    "View species-level occurrence records - toggle to view geo-validated occurrence records, native and non-native records.",
+                    " Records are colored by source class (plot surveys, herbarium specimens, iNaturalist citizen-science observations)."
                   )
                 )
               ),
