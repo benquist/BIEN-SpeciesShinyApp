@@ -116,3 +116,8 @@ Outcome: Replaced the Occurrence Map card description text with the requested wo
 Prompt: We have an error message in the Temporal Distribution tab: "Temporal stats - An error has occurred. Check your logs or contact the app author for clarification." Why is this? Can you fix it?
 Source session: current workspace session
 Outcome: Fixed a NULL-reference error in the `output$temporal_stats <- renderUI({...})` handler that occurred when bien_results() returned NULL (e.g., before any species query). Added `req(bien_results())` to gracefully prevent rendering until valid results are available, matching the pattern used in other reactive handlers in the app.
+
+23. Date: 2026-04-13
+Prompt: I dont think the error is fixed. We are still seeing it
+Source session: current workspace session
+Outcome: Diagnosed the remaining Temporal stats runtime error from shinyapps logs (unsupported `sprintf("%,d")` format in `output$temporal_stats`). Replaced it with a safe thousands-separated label via `format(..., big.mark = ",")`, then redeployed the app.

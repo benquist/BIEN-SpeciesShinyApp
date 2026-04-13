@@ -3871,9 +3871,10 @@ server <- function(input, output, session) {
     res <- req(bien_results())
     stats <- summarize_temporal_stats(res$occurrences)
     pct_with_dates <- if (stats$total_records > 0) round(100 * stats$records_with_dates / stats$total_records, 1) else 0
+    total_records_label <- format(stats$total_records, big.mark = ",", scientific = FALSE, trim = TRUE)
 
     HTML(paste(
-      sprintf("Total records: <strong>%,d</strong>", stats$total_records),
+      sprintf("Total records: <strong>%s</strong>", total_records_label),
       sprintf("With dates: <strong>%d (%.1f%%)</strong>", stats$records_with_dates, pct_with_dates),
       if (!is.na(stats$earliest_year)) sprintf("Earliest: <strong>%d</strong>", stats$earliest_year) else "",
       if (!is.na(stats$latest_year)) sprintf("Latest: <strong>%d</strong>", stats$latest_year) else "",
