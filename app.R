@@ -3868,7 +3868,7 @@ server <- function(input, output, session) {
   })
 
   output$temporal_stats <- renderUI({
-    res <- bien_results()
+    res <- req(bien_results())
     stats <- summarize_temporal_stats(res$occurrences)
     pct_with_dates <- if (stats$total_records > 0) round(100 * stats$records_with_dates / stats$total_records, 1) else 0
 

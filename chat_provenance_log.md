@@ -111,3 +111,8 @@ Outcome: Appended nine new species to the curated random-species starter pool us
 Prompt: Update the Overview/About Occurrence Map copy to mention toggling geo-validated and native/non-native records.
 Source session: current workspace session
 Outcome: Replaced the Occurrence Map card description text with the requested wording focused on species-level records and filter toggles.
+
+22. Date: 2026-04-13
+Prompt: We have an error message in the Temporal Distribution tab: "Temporal stats - An error has occurred. Check your logs or contact the app author for clarification." Why is this? Can you fix it?
+Source session: current workspace session
+Outcome: Fixed a NULL-reference error in the `output$temporal_stats <- renderUI({...})` handler that occurred when bien_results() returned NULL (e.g., before any species query). Added `req(bien_results())` to gracefully prevent rendering until valid results are available, matching the pattern used in other reactive handlers in the app.
