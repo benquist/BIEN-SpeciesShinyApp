@@ -126,3 +126,8 @@ Outcome: Diagnosed the remaining Temporal stats runtime error from shinyapps log
 Prompt: For the BIEN shiny app, timeouts/blank maps still happen for species like Capparis micracantha and Ochrosia elliptica under Conservative default profile; make it clear when effective query settings are auto-relaxed.
 Source session: current workspace session
 Outcome: Added explicit "Requested vs effective BIEN profile" messaging in query summary and adjusted Lucky-mode query planning to keep fallback strategies enabled (`max_plans = 3`, shorter per-plan timeout) so strict timeouts can still auto-relax and recover mappable records in the same query run.
+
+25. Date: 2026-04-14
+Prompt: Annona montana still loads slowly then returns a blank map; auto-run one relaxed fallback pass on timeout or zero mappable points, and notify users when effective settings are auto-relaxed.
+Source session: current workspace session
+Outcome: Added automatic strict-to-relaxed-geo fallback trigger when strict run yields zero mappable coordinates or timeout indications, while preserving the visible conservative toggle as requested. Added explicit warning notifications describing that conservative remained selected but effective query settings were auto-relaxed to recover records/map points.

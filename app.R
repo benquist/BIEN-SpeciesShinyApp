@@ -345,8 +345,13 @@ query_occurrence_with_fallback <- function(species_name, input, occ_limit, occ_p
   attempts_n <- if (isTRUE(connection_retry)) 3 else 1
   query_started <- Sys.time()
   deadline <- query_started + as.numeric(timeout_sec)
+  skip_to_relaxed_geo <- FALSE
 
   for (plan in plans) {
+    if (isTRUE(skip_to_relaxed_geo) && !identical(plan$label, "fallback_relaxed_geo")) {
+      next
+    }
+
     remaining_sec <- as.numeric(difftime(deadline, Sys.time(), units = "secs"))
     if (!is.finite(remaining_sec) || remaining_sec <= 1) {
       notes <- c(notes, "occ_timeout_budget_exhausted")
@@ -380,6 +385,17 @@ query_occurrence_with_fallback <- function(species_name, input, occ_limit, occ_p
     notes <- c(notes, paste0("occ_strategy=", plan$label, "; status=", res$status, "; attempts=", res$attempt, "; limit=", plan$limit))
 
     if (is.data.frame(res$result) && nrow(res$result) > 0) {
+      if (identical(plan$label, "strict") && isTRUE(plan$only.geovalid)) {
+        strict_mappable_n <- count_mappable_occurrences(res$result)
+        notes <- c(notes, paste0("strict_mappable=", strict_mappable_n))
+
+        if (strict_mappable_n == 0 && any(vapply(plans, function(p) identical(p$label, "fallback_relaxed_geo"), logical(1)))) {
+          notes <- c(notes, "strict_zero_mappable_triggered_relaxed_geo_pass")
+          skip_to_relaxed_geo <- TRUE
+          next
+        }
+      }
+
       return(list(data = res$result, strategy = plan$label, notes = notes, limit_used = plan$limit))
     }
 
@@ -394,6 +410,7 @@ query_occurrence_with_fallback <- function(species_name, input, occ_limit, occ_p
 
       # Timeouts on strict filters are common for large species; continue to relaxed plans.
       if (is_bien_timeout_error(err_msg)) {
+        skip_to_relaxed_geo <- TRUE
         next
       }
     }
@@ -1100,6 +1117,23 @@ sample_occurrence_rows <- function(df, target_n, sample_method = "random") {
 
   selected <- selected[seq_len(min(length(selected), target_n))]
   df[selected, , drop = FALSE]
+}
+
+count_mappable_occurrences <- function(occ) {
+  if (!is.data.frame(occ) || nrow(occ) == 0) {
+    return(0L)
+  }
+
+  lat_col <- find_first_col(occ, c("latitude", "decimal_latitude", "lat"))
+  lon_col <- find_first_col(occ, c("longitude", "decimal_longitude", "lon", "long"))
+  if (is.null(lat_col) || is.null(lon_col)) {
+    return(0L)
+  }
+
+  lat <- suppressWarnings(as.numeric(occ[[lat_col]]))
+  lon <- suppressWarnings(as.numeric(occ[[lon_col]]))
+  valid <- !is.na(lat) & !is.na(lon) & lat >= -90 & lat <= 90 & lon >= -180 & lon <= 180
+  as.integer(sum(valid, na.rm = TRUE))
 }
 
 # Standardize, QA, de-duplicate, and optionally thin occurrence records before mapping.
@@ -2795,6 +2829,23 @@ server <- function(input, output, session) {
 
   observeEvent(bien_results_live(), {
     res <- bien_results_live()
+
+    if (isTRUE(res$use_default_filter_profile) && identical(res$occ_strategy, "fallback_relaxed_geo")) {
+      showNotification(
+        "Conservative default profile remained selected, but this query auto-relaxed geovalid/native constraints after strict timeout or zero-mappable results to recover map points.",
+        type = "warning",
+        duration = 10
+      )
+    }
+
+    if (isTRUE(res$use_default_filter_profile) && identical(res$occ_strategy, "fallback_relaxed_native")) {
+      showNotification(
+        "Conservative default profile remained selected, but this query auto-relaxed native-only constraints after strict timeout to recover records.",
+        type = "warning",
+        duration = 10
+      )
+    }
+
     elapsed <- suppressWarnings(as.numeric(res$query_elapsed_sec))
     if (isTRUE(res$cache_hit) || is.na(elapsed) || elapsed < 25) {
       return(NULL)
