@@ -121,3 +121,8 @@ Outcome: Fixed a NULL-reference error in the `output$temporal_stats <- renderUI(
 Prompt: I dont think the error is fixed. We are still seeing it
 Source session: current workspace session
 Outcome: Diagnosed the remaining Temporal stats runtime error from shinyapps logs (unsupported `sprintf("%,d")` format in `output$temporal_stats`). Replaced it with a safe thousands-separated label via `format(..., big.mark = ",")`, then redeployed the app.
+
+24. Date: 2026-04-14
+Prompt: For the BIEN shiny app, timeouts/blank maps still happen for species like Capparis micracantha and Ochrosia elliptica under Conservative default profile; make it clear when effective query settings are auto-relaxed.
+Source session: current workspace session
+Outcome: Added explicit "Requested vs effective BIEN profile" messaging in query summary and adjusted Lucky-mode query planning to keep fallback strategies enabled (`max_plans = 3`, shorter per-plan timeout) so strict timeouts can still auto-relax and recover mappable records in the same query run.

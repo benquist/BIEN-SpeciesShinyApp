@@ -353,7 +353,9 @@ query_occurrence_with_fallback <- function(species_name, input, occ_limit, occ_p
       break
     }
 
-    plan_timeout_sec <- max(2, min(per_plan_timeout, remaining_sec))
+    # Keep strict plan bounded so relaxed fallback plans still get a chance within timeout budget.
+    plan_timeout_cap <- if (identical(plan$label, "strict")) min(per_plan_timeout, 25) else per_plan_timeout
+    plan_timeout_sec <- max(2, min(plan_timeout_cap, remaining_sec))
 
     res <- safe_bien_retry(
       function() {
@@ -385,8 +387,14 @@ query_occurrence_with_fallback <- function(species_name, input, occ_limit, occ_p
       err_msg <- conditionMessage(res$result)
       notes <- c(notes, paste("occ_error:", err_msg))
 
-      if (is_bien_connection_error(err_msg) || is_bien_timeout_error(err_msg)) {
+      # Connection saturation usually won't improve within the same query cycle.
+      if (is_bien_connection_error(err_msg)) {
         break
+      }
+
+      # Timeouts on strict filters are common for large species; continue to relaxed plans.
+      if (is_bien_timeout_error(err_msg)) {
+        next
       }
     }
   }
@@ -2680,8 +2688,10 @@ server <- function(input, output, session) {
         occ_page_size,
         timeout_sec,
         connection_retry = retry_mode,
-        max_plans = if (isTRUE(lucky_fast_mode)) 1 else 3,
-        per_plan_timeout = if (isTRUE(lucky_fast_mode)) 8 else 60,
+        # Even in Lucky mode, keep fallback plans enabled so a strict timeout can
+        # still recover mappable records via relaxed native/geovalid strategies.
+        max_plans = 3,
+        per_plan_timeout = if (isTRUE(lucky_fast_mode)) 4 else 60,
         randomize_order = FALSE
       )
       occ <- occ_bundle$data
@@ -3390,6 +3400,22 @@ server <- function(input, output, session) {
       "fresh BIEN query"
     }
     connection_issue <- is_bien_connection_error(res$query_errors)
+    strategy <- if (!is.null(res$occ_strategy) && nzchar(res$occ_strategy)) as.character(res$occ_strategy) else "strict"
+    requested_profile_txt <- if (isTRUE(res$use_default_filter_profile)) {
+      "Conservative default profile"
+    } else {
+      "Custom profile"
+    }
+    effective_query_txt <- switch(
+      strategy,
+      strict = "Strict query (requested filters kept)",
+      fallback_relaxed_native = "Auto-relaxed native filter (geovalid unchanged)",
+      fallback_relaxed_geo = "Auto-relaxed native and geovalid filters",
+      backend_timeout_error = "No successful result (BIEN timeout)",
+      backend_connection_error = "No successful result (BIEN connection error)",
+      paste0("Strategy: ", strategy)
+    )
+    conservative_relaxed <- isTRUE(res$use_default_filter_profile) && strategy %in% c("fallback_relaxed_native", "fallback_relaxed_geo")
 
     map_status <- if (connection_issue) {
       "BIEN connection failed during this query, so no occurrence records could be retrieved"
@@ -3492,6 +3518,12 @@ server <- function(input, output, session) {
       "<br><strong>Trait fetch cap used:</strong> ", res$trait_fetch_limit,
       "<br><strong>Use BIEN is_cultivated filter:</strong> ", ifelse(res$use_cultivated_filter, paste0("yes (include cultivated = ", tolower(as.character(res$include_cultivated)), ")"), "no"),
       "<br><strong>Use BIEN is_introduced filter:</strong> ", ifelse(res$use_introduced_filter, paste0("yes (native only = ", tolower(as.character(res$natives_only)), ")"), "no"),
+      "<br><strong>Requested vs effective BIEN profile:</strong> ", requested_profile_txt, " -> ", effective_query_txt,
+      if (conservative_relaxed) {
+        "<br><strong>Conservative profile preserved exactly?:</strong> no (auto-relaxed after strict attempt to recover mappable records)"
+      } else {
+        ""
+      },
       "<br><strong>Occurrence strategy:</strong> ", res$occ_strategy,
       if (occ_n > 0 && mappable_n == 0) {
         "<br><strong>Map note:</strong> This is a BIEN data-response limitation for the current species/query, not necessarily an app error."
