@@ -131,3 +131,58 @@ Outcome: Added explicit "Requested vs effective BIEN profile" messaging in query
 Prompt: Annona montana still loads slowly then returns a blank map; auto-run one relaxed fallback pass on timeout or zero mappable points, and notify users when effective settings are auto-relaxed.
 Source session: current workspace session
 Outcome: Added automatic strict-to-relaxed-geo fallback trigger when strict run yields zero mappable coordinates or timeout indications, while preserving the visible conservative toggle as requested. Added explicit warning notifications describing that conservative remained selected but effective query settings were auto-relaxed to recover records/map points.
+
+26. Date: 2026-04-21
+Prompt: bien shiny app I would like to now work on https://benquist.shinyapps.io/bien-species-shinyapp/ For the Species name look up I would like to add a auto look up name based on the accepted species names in the BIEN db We just added such a feature in https://benquist.shinyapps.io/bien-traits-shinyapp/
+Source session: current workspace session
+Outcome: Replaced the Species name free-text control with a BIEN-backed selectize autocomplete that loads accepted species names from BIEN taxonomy, disables ad-hoc free creation, and keeps random-species selection integrated with the new lookup input.
+
+27. Date: 2026-04-21
+Prompt: yes deploy
+Source session: current workspace session
+Outcome: Deployed BIEN-SpeciesShinyApp to shinyapps.io via deploy_safe.R and verified the public URL loaded the updated app UI successfully.
+
+28. Date: 2026-04-21
+Prompt: Something is not working with the entry of text in the box. I start typing and the text dissapears. There also seems to be an arrow in the far right hand side that cannot be clicked
+Source session: current workspace session
+Outcome: Fixed the Species autocomplete so the selectize control initializes accepted BIEN names once at session start instead of reloading on every keystroke, which stopped typed text from disappearing and restored normal dropdown behavior.
+
+29. Date: 2026-04-21
+Prompt: I would like the species name box to be larger
+Source session: current workspace session
+Outcome: Enlarged the Species name control by widening its sidebar column and increasing the selectize field height and font size so the lookup box is easier to use.
+
+30. Date: 2026-04-21
+Prompt: When I launch the app, Pinus ponderosa should come up first populating the species name, but it doesn't show in the box even though the map appears.
+Source session: current workspace session
+Outcome: Fixed startup species not displaying by initializing selectizeInput with STARTUP_SPECIES in the choices list instead of NULL, so the startup value displays immediately while the once-per-session observer loads all accepted BIEN names and keeps it selected.
+
+31. Date: 2026-04-21
+Prompt: What BIEN source populates species-name autofill, and why does typing Sciadoden not match Sciadodendron?
+Source session: current workspace session
+Outcome: Confirmed autocomplete source is BIEN `bien_taxonomy.scrubbed_species_binomial` with accepted-status filtering; removed the hard 75,000-name SQL limit so later-alphabet accepted species (including Sciadodendron) are included in suggestions.
+
+32. Date: 2026-04-21
+Prompt: Add a popup warning when a species name is found in BIEN taxonomy but no mappable occurrence points are available under current filters.
+Source session: current workspace session
+Outcome: Added query-time popup warning logic that checks BIEN taxonomy presence (with session caching) and shows a clear warning when mappable points are zero under active filters.
+
+32. Date: 2026-04-21
+Prompt: Make the Query, random species, and Help controls in BIEN-SpeciesShinyApp feel more like real buttons (similar to BIEN-TraitsShinyApp), and move random species below the species name box.
+Source session: current workspace session
+Outcome: Updated Species app sidebar layout so random species appears under the species field, and added raised gradient button styles for Query, random species, and Help to match the stronger Traits-style click affordance; redeployed to shinyapps.io.
+
+29. Date: 2026-04-21
+Prompt: The random species button is no longer populating the species text automatically
+Source session: current workspace session
+Outcome: Fixed the random-species and BIEN name-suggestion flows so the selected species is injected into the selectize choices before selection, restoring automatic species-field updates.
+
+30. Date: 2026-04-21
+Prompt: When I type "Pinus pinderosa" (a misspelling) and hit Query nothing is returned, even with "Suggest closest match" checked.
+Source session: current workspace session
+Outcome: Root cause was selectize create=FALSE preventing free-form text submission — misspelled names could never reach the server. Fixed by setting create=TRUE, createOnBlur=TRUE so typed-but-unmatched names are submitted as-is. The existing find_best_species_spelling() fuzzy logic now runs and surfaces "Pinus ponderosa" as a high-confidence suggestion. Deployed to shinyapps.io.
+
+31. Date: 2026-04-21
+Prompt: Standardize BIEN-SpeciesShinyApp so its tabs, header, BIEN logo placement, fonts, buttons, and color palette match BIEN-TraitsShinyApp more closely, with the BIEN logo always first on the left.
+Source session: current workspace session
+Outcome: Reworked the Species app header to use the Traits-style branded page header with the BIEN logo first on the left, aligned typography and color tokens to the Traits portal, and ported the Traits tab/button visual language while preserving the Species app sidebar, tab structure, and server behavior. Deployed to shinyapps.io.

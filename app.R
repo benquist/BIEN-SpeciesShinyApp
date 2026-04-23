@@ -222,6 +222,26 @@ find_best_species_spelling <- function(species_name, timeout_sec = 20) {
   )
 }
 
+load_accepted_species_suggestions <- function(timeout_sec = 60) {
+  sql <- paste0(
+    "SELECT DISTINCT b.scrubbed_species_binomial AS taxon ",
+    "FROM bien_taxonomy b ",
+    "WHERE b.scrubbed_taxonomic_status = 'Accepted' ",
+    "AND b.scrubbed_species_binomial IS NOT NULL ",
+    "AND b.scrubbed_species_binomial <> '' ",
+    "ORDER BY b.scrubbed_species_binomial;"
+  )
+
+  out <- safe_bien_call(BIEN:::.BIEN_sql(sql, fetch.query = FALSE), timeout_sec = timeout_sec)
+  if (inherits(out, "error") || !is.data.frame(out) || nrow(out) == 0 || !"taxon" %in% names(out)) {
+    return(character(0))
+  }
+
+  vals <- unique(str_squish(as.character(out$taxon)))
+  vals <- vals[!is.na(vals) & nzchar(vals)]
+  vals
+}
+
 sql_quote_literal <- function(x) {
   x <- as.character(x)
   x <- gsub("'", "''", x, fixed = TRUE)
@@ -1462,72 +1482,491 @@ summarize_temporal_stats <- function(occ_df) {
   )
 }
 
+normalize_field_name <- function(x) {
+  x <- trimws(tolower(as.character(x)))
+  gsub("[^a-z0-9]", "", x)
+}
+
+drop_empty_rows <- function(df) {
+  if (!is.data.frame(df) || nrow(df) == 0) {
+    return(df)
+  }
+
+  keep_idx <- apply(df, 1, function(row_vals) {
+    vals <- trimws(as.character(row_vals))
+    any(!is.na(vals) & nzchar(vals))
+  })
+
+  df[keep_idx, , drop = FALSE]
+}
+
+get_dwc_aliases <- function() {
+  list(
+    scientificName = c("scientificName", "species", "species_name", "taxon", "taxon_name", "organism"),
+    decimalLatitude = c("decimalLatitude", "latitude", "lat", "y", "lat_dd"),
+    decimalLongitude = c("decimalLongitude", "longitude", "long", "lon", "x", "long_dd"),
+    plotName = c("plotName", "plot_name", "plot", "site", "site_name", "location"),
+    eventDate = c("eventDate", "date", "date_collected", "collection_date", "sample_date"),
+    occurrenceID = c("occurrenceID", "record_id", "id", "sample_id", "observation_id"),
+    basisOfRecord = c("basisOfRecord", "observation_type", "record_type"),
+    measurementType = c("measurementType", "trait", "trait_name", "variable", "measurement_name"),
+    measurementValue = c("measurementValue", "value", "trait_value", "dbh", "diameter", "measurement"),
+    measurementUnit = c("measurementUnit", "unit", "units", "trait_unit")
+  )
+}
+
+get_bien_reference_fields <- function(timeout_sec = 12) {
+  occ_fields <- character(0)
+  trait_fields <- character(0)
+
+  occ <- safe_bien_call(
+    BIEN_occurrence_species(
+      "Pinus ponderosa",
+      cultivated = FALSE,
+      natives.only = TRUE,
+      only.geovalid = TRUE,
+      all.taxonomy = TRUE,
+      limit = 1,
+      record_limit = 1,
+      fetch.query = FALSE
+    ),
+    timeout_sec = timeout_sec
+  )
+  if (is.data.frame(occ)) {
+    occ_fields <- names(occ)
+  }
+
+  traits <- safe_bien_call(
+    BIEN_trait_species(
+      "Pinus ponderosa",
+      all.taxonomy = TRUE,
+      source.citation = TRUE,
+      limit = 1,
+      record_limit = 1,
+      fetch.query = FALSE
+    ),
+    timeout_sec = timeout_sec
+  )
+  if (is.data.frame(traits)) {
+    trait_fields <- names(traits)
+  }
+
+  fallback_fields <- c(
+    "scrubbed_species_binomial", "scrubbed_family", "scrubbed_genus", "latitude", "longitude",
+    "date_collected", "datasource", "dataset", "dataowner", "collection_code", "trait_name",
+    "trait_value", "unit", "method", "elevation_m", "url_source", "project_pi", "id",
+    "plot_name", "occurrence_id"
+  )
+
+  unique(c(occ_fields, trait_fields, fallback_fields))
+}
+
+lookup_alias_term <- function(col_name, alias_map) {
+  col_norm <- normalize_field_name(col_name)
+  for (term in names(alias_map)) {
+    aliases <- unique(c(term, alias_map[[term]]))
+    alias_norm <- normalize_field_name(aliases)
+    if (col_norm %in% alias_norm) {
+      return(term)
+    }
+  }
+  NA_character_
+}
+
+build_column_mapping <- function(df, source_file, bien_reference_fields) {
+  if (!is.data.frame(df)) {
+    return(data.frame())
+  }
+
+  dwc_alias <- get_dwc_aliases()
+  bien_alias <- list(
+    scrubbed_species_binomial = c("species", "scientific_name", "scientificname", "scientificName", "taxon"),
+    latitude = c("decimalLatitude", "latitude", "lat"),
+    longitude = c("decimalLongitude", "longitude", "long", "lon"),
+    date_collected = c("eventDate", "date", "date_collected", "collection_date"),
+    trait_name = c("measurementType", "trait_name", "trait", "variable", "measurement_name", "dbh"),
+    trait_value = c("measurementValue", "trait_value", "value", "dbh", "diameter"),
+    unit = c("measurementUnit", "trait_unit", "unit", "units"),
+    dataset = c("dataset", "project", "survey", "study")
+  )
+
+  bien_norm <- normalize_field_name(bien_reference_fields)
+  col_names <- names(df)
+  col_norm <- normalize_field_name(col_names)
+
+  mapped_dwc <- vapply(col_names, function(x) lookup_alias_term(x, dwc_alias), character(1))
+  mapped_bien <- vapply(col_names, function(x) {
+    alias_hit <- lookup_alias_term(x, bien_alias)
+    if (!is.na(alias_hit)) {
+      return(alias_hit)
+    }
+
+    this_norm <- normalize_field_name(x)
+    hit_idx <- which(bien_norm == this_norm)
+    if (length(hit_idx) > 0) {
+      return(bien_reference_fields[[hit_idx[[1]]]])
+    }
+
+    NA_character_
+  }, character(1))
+
+  data.frame(
+    source_file = source_file,
+    input_column = col_names,
+    normalized_column = col_norm,
+    mapped_dwc_term = mapped_dwc,
+    mapped_bien_field = mapped_bien,
+    bien_exact_name_match = col_norm %in% bien_norm,
+    stringsAsFactors = FALSE
+  )
+}
+
+suggest_merge_key <- function(mapped_tables, standardized_tables) {
+  if (length(standardized_tables) < 2) {
+    return(list(key = NULL, candidates = data.frame()))
+  }
+
+  all_cols <- unique(unlist(lapply(standardized_tables, names), use.names = FALSE))
+  key_candidates <- all_cols[all_cols %in% c("plotName", "occurrenceID", "scientificName", "scrubbed_species_binomial", "eventDate")]
+  if (length(key_candidates) == 0) {
+    key_candidates <- all_cols
+  }
+
+  cand_tbl <- lapply(key_candidates, function(k) {
+    present_in <- vapply(standardized_tables, function(df) k %in% names(df), logical(1))
+    if (sum(present_in) < 2) {
+      return(NULL)
+    }
+
+    non_missing <- vapply(standardized_tables[present_in], function(df) {
+      vals <- trimws(as.character(df[[k]]))
+      mean(!is.na(vals) & nzchar(vals))
+    }, numeric(1))
+
+    uniqueness <- vapply(standardized_tables[present_in], function(df) {
+      vals <- trimws(as.character(df[[k]]))
+      vals <- vals[!is.na(vals) & nzchar(vals)]
+      if (length(vals) == 0) return(0)
+      length(unique(vals)) / length(vals)
+    }, numeric(1))
+
+    data.frame(
+      candidate_key = k,
+      files_present = sum(present_in),
+      mean_non_missing = round(mean(non_missing), 3),
+      mean_uniqueness = round(mean(uniqueness), 3),
+      score = round(sum(present_in) * mean(non_missing) * mean(uniqueness), 4),
+      stringsAsFactors = FALSE
+    )
+  })
+
+  cand_tbl <- dplyr::bind_rows(cand_tbl)
+  if (!is.data.frame(cand_tbl) || nrow(cand_tbl) == 0) {
+    return(list(key = NULL, candidates = data.frame()))
+  }
+
+  cand_tbl <- cand_tbl %>% arrange(desc(score), desc(files_present), desc(mean_non_missing))
+  list(key = cand_tbl$candidate_key[[1]], candidates = cand_tbl)
+}
+
+standardize_table_columns <- function(df, map_tbl, source_file) {
+  if (!is.data.frame(df) || nrow(df) == 0) {
+    return(df)
+  }
+
+  rename_to <- ifelse(
+    !is.na(map_tbl$mapped_dwc_term) & nzchar(map_tbl$mapped_dwc_term),
+    map_tbl$mapped_dwc_term,
+    ifelse(!is.na(map_tbl$mapped_bien_field) & nzchar(map_tbl$mapped_bien_field), map_tbl$mapped_bien_field, map_tbl$input_column)
+  )
+
+  names(df) <- make.unique(rename_to, sep = "_")
+  df$source_file <- source_file
+  df$source_row_id <- seq_len(nrow(df))
+
+  if ("measurementValue" %in% names(df) && !"measurementType" %in% names(df)) {
+    df$measurementType <- "diameter_at_breast_height"
+  }
+  if ("measurementValue" %in% names(df) && !"measurementUnit" %in% names(df)) {
+    df$measurementUnit <- "cm"
+  }
+
+  df
+}
+
+merge_standardized_tables <- function(std_tables, merge_key) {
+  if (length(std_tables) == 0) {
+    return(data.frame())
+  }
+
+  merged <- std_tables[[1]]
+  if (length(std_tables) == 1) {
+    return(merged)
+  }
+
+  for (i in 2:length(std_tables)) {
+    next_tbl <- std_tables[[i]]
+    common_cols <- intersect(names(merged), names(next_tbl))
+
+    by_cols <- character(0)
+    if (!is.null(merge_key) && nzchar(merge_key) && merge_key %in% common_cols) {
+      by_cols <- merge_key
+    } else if (length(common_cols) > 0) {
+      by_cols <- common_cols[common_cols %in% c("plotName", "occurrenceID", "scientificName", "scrubbed_species_binomial")]
+      if (length(by_cols) > 1) {
+        by_cols <- by_cols[[1]]
+      }
+    }
+
+    if (length(by_cols) == 0) {
+      merged <- dplyr::bind_rows(merged, next_tbl)
+    } else {
+      merged <- dplyr::full_join(merged, next_tbl, by = by_cols)
+    }
+  }
+
+  merged
+}
+
+augment_tnrs_and_coordinates <- function(df, timeout_sec = 8, taxon_cap = 40) {
+  if (!is.data.frame(df) || nrow(df) == 0) {
+    return(df)
+  }
+
+  taxon_col <- find_first_col(df, c("scientificName", "scrubbed_species_binomial", "species", "taxon"))
+  if (!is.null(taxon_col)) {
+    taxa <- unique(trimws(as.character(df[[taxon_col]])))
+    taxa <- taxa[!is.na(taxa) & nzchar(taxa)]
+    taxa <- utils::head(taxa, taxon_cap)
+
+    tax_lookup <- lapply(taxa, function(sp) {
+      tax_res <- safe_bien_call(BIEN_taxonomy_species(sp), timeout_sec = timeout_sec)
+      if (is.data.frame(tax_res) && nrow(tax_res) > 0) {
+        return(data.frame(
+          taxon_submitted = sp,
+          taxon_matched = as.character(tax_res$scrubbed_species_binomial[[1]]),
+          taxon_family = as.character(tax_res$scrubbed_family[[1]]),
+          taxon_match_status = "exact_or_backbone_match",
+          stringsAsFactors = FALSE
+        ))
+      }
+
+      suggestion <- find_best_species_spelling(sp, timeout_sec = timeout_sec)
+      if (is.list(suggestion) && identical(suggestion$status, "suggested")) {
+        return(data.frame(
+          taxon_submitted = sp,
+          taxon_matched = as.character(suggestion$suggested_name),
+          taxon_family = NA_character_,
+          taxon_match_status = paste0("suggested_", suggestion$confidence),
+          stringsAsFactors = FALSE
+        ))
+      }
+
+      data.frame(
+        taxon_submitted = sp,
+        taxon_matched = NA_character_,
+        taxon_family = NA_character_,
+        taxon_match_status = "unresolved",
+        stringsAsFactors = FALSE
+      )
+    })
+
+    tax_lookup <- dplyr::bind_rows(tax_lookup)
+    df$taxon_submitted <- as.character(df[[taxon_col]])
+    df <- dplyr::left_join(df, tax_lookup, by = "taxon_submitted")
+  } else {
+    df$taxon_submitted <- NA_character_
+    df$taxon_matched <- NA_character_
+    df$taxon_family <- NA_character_
+    df$taxon_match_status <- "no_taxon_column"
+  }
+
+  lat_col <- find_first_col(df, c("decimalLatitude", "latitude", "lat"))
+  lon_col <- find_first_col(df, c("decimalLongitude", "longitude", "long", "lon"))
+
+  lat_vals <- if (!is.null(lat_col)) suppressWarnings(as.numeric(df[[lat_col]])) else rep(NA_real_, nrow(df))
+  lon_vals <- if (!is.null(lon_col)) suppressWarnings(as.numeric(df[[lon_col]])) else rep(NA_real_, nrow(df))
+
+  coord_valid <- !is.na(lat_vals) & !is.na(lon_vals) & lat_vals >= -90 & lat_vals <= 90 & lon_vals >= -180 & lon_vals <= 180
+  coord_issue <- ifelse(is.na(lat_vals) | is.na(lon_vals), "missing_coordinates", ifelse(coord_valid, NA_character_, "out_of_bounds"))
+
+  df$decimalLatitude <- lat_vals
+  df$decimalLongitude <- lon_vals
+  df$coordinate_valid_basic <- coord_valid
+  df$coordinate_issue <- coord_issue
+
+  df
+}
+
+build_staging_table <- function(df) {
+  if (!is.data.frame(df) || nrow(df) == 0) {
+    return(data.frame())
+  }
+
+  event_col <- find_first_col(df, c("eventDate", "date_collected", "date", "collection_date"))
+  basis_col <- find_first_col(df, c("basisOfRecord", "observation_type", "record_type"))
+  occ_id_col <- find_first_col(df, c("occurrenceID", "occurrence_id", "record_id", "id"))
+  dataset_col <- find_first_col(df, c("dataset", "project", "survey"))
+  trait_name_col <- find_first_col(df, c("measurementType", "trait_name", "trait", "variable"))
+  trait_val_col <- find_first_col(df, c("measurementValue", "trait_value", "value", "dbh", "diameter"))
+  trait_unit_col <- find_first_col(df, c("measurementUnit", "unit", "units", "trait_unit"))
+  plot_col <- find_first_col(df, c("plotName", "plot_name", "plot", "site_name"))
+
+  staging <- data.frame(
+    staging_record_id = seq_len(nrow(df)),
+    source_file = if ("source_file" %in% names(df)) as.character(df$source_file) else NA_character_,
+    source_row_id = if ("source_row_id" %in% names(df)) suppressWarnings(as.integer(df$source_row_id)) else NA_integer_,
+    plotName = if (!is.null(plot_col)) as.character(df[[plot_col]]) else NA_character_,
+    scientificName_submitted = if ("taxon_submitted" %in% names(df)) as.character(df$taxon_submitted) else NA_character_,
+    scientificName_matched = if ("taxon_matched" %in% names(df)) as.character(df$taxon_matched) else NA_character_,
+    scientificName_match_status = if ("taxon_match_status" %in% names(df)) as.character(df$taxon_match_status) else NA_character_,
+    scientificFamily_matched = if ("taxon_family" %in% names(df)) as.character(df$taxon_family) else NA_character_,
+    decimalLatitude = if ("decimalLatitude" %in% names(df)) suppressWarnings(as.numeric(df$decimalLatitude)) else NA_real_,
+    decimalLongitude = if ("decimalLongitude" %in% names(df)) suppressWarnings(as.numeric(df$decimalLongitude)) else NA_real_,
+    coordinate_valid_basic = if ("coordinate_valid_basic" %in% names(df)) as.logical(df$coordinate_valid_basic) else NA,
+    coordinate_issue = if ("coordinate_issue" %in% names(df)) as.character(df$coordinate_issue) else NA_character_,
+    eventDate = if (!is.null(event_col)) as.character(df[[event_col]]) else NA_character_,
+    basisOfRecord = if (!is.null(basis_col)) as.character(df[[basis_col]]) else NA_character_,
+    occurrenceID = if (!is.null(occ_id_col)) as.character(df[[occ_id_col]]) else NA_character_,
+    dataset = if (!is.null(dataset_col)) as.character(df[[dataset_col]]) else NA_character_,
+    measurementType = if (!is.null(trait_name_col)) as.character(df[[trait_name_col]]) else NA_character_,
+    measurementValue = if (!is.null(trait_val_col)) as.character(df[[trait_val_col]]) else NA_character_,
+    measurementUnit = if (!is.null(trait_unit_col)) as.character(df[[trait_unit_col]]) else NA_character_,
+    ingestion_timestamp_utc = format(Sys.time(), tz = "UTC", usetz = TRUE),
+    stringsAsFactors = FALSE
+  )
+
+  staging
+}
+
+run_ingest_workflow <- function(file_info) {
+  if (is.null(file_info) || nrow(file_info) == 0) {
+    return(NULL)
+  }
+
+  bien_fields <- get_bien_reference_fields(timeout_sec = 12)
+
+  tables <- lapply(seq_len(nrow(file_info)), function(i) {
+    this_path <- file_info$datapath[[i]]
+    this_name <- file_info$name[[i]]
+    df <- tryCatch(
+      read.csv(this_path, stringsAsFactors = FALSE, strip.white = TRUE, na.strings = c("", "NA", "NULL")),
+      error = function(e) data.frame()
+    )
+    df <- drop_empty_rows(df)
+    list(name = this_name, data = df)
+  })
+
+  valid_tables <- tables[vapply(tables, function(x) is.data.frame(x$data) && nrow(x$data) > 0, logical(1))]
+  if (length(valid_tables) == 0) {
+    return(NULL)
+  }
+
+  map_list <- lapply(valid_tables, function(tbl) {
+    build_column_mapping(tbl$data, tbl$name, bien_reference_fields = bien_fields)
+  })
+  map_df <- dplyr::bind_rows(map_list)
+
+  std_tables <- lapply(seq_along(valid_tables), function(i) {
+    standardize_table_columns(valid_tables[[i]]$data, map_list[[i]], valid_tables[[i]]$name)
+  })
+  names(std_tables) <- vapply(valid_tables, function(x) x$name, character(1))
+
+  merge_info <- suggest_merge_key(map_list, std_tables)
+  merged <- merge_standardized_tables(std_tables, merge_info$key)
+  merged_aug <- augment_tnrs_and_coordinates(merged, timeout_sec = 8, taxon_cap = 40)
+  staging <- build_staging_table(merged_aug)
+
+  file_summary <- data.frame(
+    source_file = vapply(valid_tables, function(x) x$name, character(1)),
+    n_rows = vapply(valid_tables, function(x) nrow(x$data), numeric(1)),
+    n_columns = vapply(valid_tables, function(x) ncol(x$data), numeric(1)),
+    dwc_mapped_columns = vapply(map_list, function(x) sum(!is.na(x$mapped_dwc_term)), numeric(1)),
+    bien_mapped_columns = vapply(map_list, function(x) sum(!is.na(x$mapped_bien_field)), numeric(1)),
+    bien_exact_name_matches = vapply(map_list, function(x) sum(isTRUE(x$bien_exact_name_match)), numeric(1)),
+    stringsAsFactors = FALSE
+  )
+
+  bien_schema_check <- tryCatch(
+    BIEN_metadata_match_data(
+      old = as.data.frame(merged_aug[0, , drop = FALSE]),
+      new = as.data.frame(stats::setNames(as.list(rep(NA_character_, length(bien_fields))), bien_fields)),
+      return = "logical"
+    ),
+    error = function(e) NA
+  )
+
+  list(
+    file_summary = file_summary,
+    column_map = map_df,
+    merge_candidates = merge_info$candidates,
+    merge_key = merge_info$key,
+    merged = merged_aug,
+    staging = staging,
+    bien_schema_check = bien_schema_check
+  )
+}
+
 # Main Shiny user interface: query controls plus linked tabs for occurrence, trait, and range evidence.
 ui <- fluidPage(
   tags$head(
     tags$style(HTML("
       :root {
         --bien-blue: #2f79b7;
-        --bien-blue-deep: #1e5f98;
+        --bien-blue-deep: #1f5b8f;
         --bien-green: #74b64a;
-        --bien-green-deep: #4f8f2a;
+        --bien-green-deep: #4e8c2c;
         --bien-sky: #e9f4ff;
         --bien-mint: #eef9e8;
+        --panel-border: #cfe2f3;
       }
       body {
+        padding: 20px 0;
         background: linear-gradient(180deg, #f7fbff 0%, #fbfef9 100%);
+        color: #24445f;
       }
-      .bien-app-header {
+      .page-header {
+        padding: 20px;
+        background: linear-gradient(180deg, #ffffff 0%, #f2f9ff 100%);
+        border-bottom: 1px solid var(--panel-border);
+        margin: -20px 0 20px 0;
+        box-shadow: 0 3px 12px rgba(31, 91, 143, 0.08);
+      }
+      .bien-header-brand {
         display: flex;
         align-items: center;
-        justify-content: space-between;
-        gap: 14px;
-        margin: 6px 0 14px 0;
-        padding: 12px 14px;
-        border-radius: 10px;
-        border: 1px solid #a8cbe9;
-        background: linear-gradient(110deg, rgba(47,121,183,0.2), rgba(116,182,74,0.24));
+        gap: 16px;
+        flex-wrap: wrap;
+      }
+      .bien-header-copy {
+        min-width: 0;
       }
       .bien-title {
         margin: 0;
         color: var(--bien-blue-deep);
         font-weight: 700;
+        font-size: 2em;
+        line-height: 1.2;
       }
       .bien-subtitle {
-        margin: 3px 0 0 0;
+        margin: 8px 0 0 0;
         color: #426988;
-        font-size: 0.95em;
-      }
-      .bien-logo-wrap {
-        width: 140px;
-        height: 52px;
-        border-radius: 8px;
-        border: 1px solid #b9d5ea;
-        background: #ffffff;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        overflow: hidden;
-        flex-shrink: 0;
+        font-size: 1.05em;
+        line-height: 1.4;
+        max-width: 920px;
       }
       .bien-logo {
-        max-width: 100%;
-        max-height: 100%;
-        object-fit: contain;
+        height: 62px;
+        width: auto;
+        filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.12));
       }
       .bien-logo-fallback {
-        width: 100%;
-        height: 100%;
         display: none;
-        align-items: center;
-        justify-content: center;
-        font-weight: 700;
-        color: var(--bien-blue-deep);
-        background: linear-gradient(90deg, #def0ff, #edf8e4);
       }
       .well {
-        border: 1px solid #cfe2c2;
+        border: 1px solid var(--panel-border);
         background: linear-gradient(180deg, #f5fbf3 0%, #f7fcff 100%);
+        box-shadow: 0 2px 8px rgba(47, 121, 183, 0.08);
       }
       .btn-primary {
         background: linear-gradient(90deg, var(--bien-blue), var(--bien-green));
@@ -1539,25 +1978,75 @@ ui <- fluidPage(
         color: #3a6520;
       }
       .nav-tabs {
+        margin-bottom: 12px;
+        border-bottom: 0;
         display: flex;
         flex-wrap: wrap;
-        border-bottom: 1px solid #ddd;
+        gap: 8px;
+        padding: 2px;
       }
       .nav-tabs > li {
-        flex: 0 0 auto;
+        float: none;
+        margin-bottom: 0;
       }
       .nav-tabs > li > a {
-        color: #2f5f86;
-        padding: 8px 12px;
-        font-size: 0.95em;
+        font-weight: 700;
+        color: #1f4f73;
+        border: 2px solid #b8cee2;
+        border-radius: 12px;
+        background: linear-gradient(180deg, #f8fcff 0%, #edf6ff 100%);
+        padding: 10px 14px;
+        transition: transform 0.08s ease, box-shadow 0.12s ease, filter 0.2s ease;
+        box-shadow: 0 1px 0 #d7e6f4, 0 3px 8px rgba(27, 75, 111, 0.08);
       }
+      .nav-tabs > li > a:hover,
+      .nav-tabs > li > a:focus {
+        filter: brightness(1.03);
+        transform: translateY(-1px);
+        box-shadow: 0 1px 0 #d7e6f4, 0 5px 10px rgba(27, 75, 111, 0.14);
+        border-color: #92b7d6;
+        color: #163d5a;
+      }
+      .nav-tabs > li:nth-child(1) > a { border-left: 6px solid #2f79b7; }
+      .nav-tabs > li:nth-child(2) > a { border-left: 6px solid #49a078; }
+      .nav-tabs > li:nth-child(3) > a { border-left: 6px solid #69b34c; }
+      .nav-tabs > li:nth-child(4) > a { border-left: 6px solid #d4a537; }
+      .nav-tabs > li:nth-child(5) > a { border-left: 6px solid #e07a5f; }
+      .nav-tabs > li:nth-child(6) > a { border-left: 6px solid #7b8ec8; }
+      .nav-tabs > li:nth-child(7) > a { border-left: 6px solid #4e8c2c; }
+      .nav-tabs > li:nth-child(8) > a { border-left: 6px solid #2a83a8; }
+      .nav-tabs > li:nth-child(9) > a { border-left: 6px solid #6f8f3f; }
       .nav-tabs > li.active > a,
       .nav-tabs > li.active > a:focus,
       .nav-tabs > li.active > a:hover {
-        color: var(--bien-blue-deep);
-        border-top: 3px solid var(--bien-green);
-        background: linear-gradient(180deg, #ecf6ff 0%, #f4fbef 100%);
-        font-weight: 600;
+        color: #ffffff;
+        background: linear-gradient(180deg, #3d89c8 0%, #1f5b8f 100%);
+        border: 2px solid #1f5b8f;
+        box-shadow: 0 2px 0 #18456f, 0 7px 14px rgba(31, 91, 143, 0.25);
+        transform: translateY(-1px);
+      }
+      .nav-tabs > li.active:nth-child(2) > a,
+      .nav-tabs > li.active:nth-child(2) > a:focus,
+      .nav-tabs > li.active:nth-child(2) > a:hover,
+      .nav-tabs > li.active:nth-child(3) > a,
+      .nav-tabs > li.active:nth-child(3) > a:focus,
+      .nav-tabs > li.active:nth-child(3) > a:hover,
+      .nav-tabs > li.active:nth-child(7) > a,
+      .nav-tabs > li.active:nth-child(7) > a:focus,
+      .nav-tabs > li.active:nth-child(7) > a:hover,
+      .nav-tabs > li.active:nth-child(9) > a,
+      .nav-tabs > li.active:nth-child(9) > a:focus,
+      .nav-tabs > li.active:nth-child(9) > a:hover {
+        background: linear-gradient(180deg, #87c95d 0%, #4e8c2c 100%);
+        border-color: #4e8c2c;
+        box-shadow: 0 2px 0 #386620, 0 7px 14px rgba(62, 112, 36, 0.22);
+      }
+      .tab-content {
+        background: #fff;
+        border: 2px solid #b8cee2;
+        border-radius: 12px;
+        padding: 16px;
+        box-shadow: 0 6px 16px rgba(33, 82, 120, 0.08);
       }
       .bien-overview-card {
         background: linear-gradient(180deg, #f0f7ff 0%, #f5fbef 100%);
@@ -1614,48 +2103,127 @@ ui <- fluidPage(
         font-size: 0.88em;
         line-height: 1.35;
       }
+      .bien-species-input .selectize-input {
+        min-height: 50px;
+        padding: 10px 14px;
+        font-size: 1.08em;
+        line-height: 1.4;
+      }
+      .bien-species-input .selectize-input > input {
+        font-size: 1.08em;
+      }
+      .bien-species-input .selectize-dropdown,
+      .bien-species-input .selectize-dropdown-content {
+        font-size: 1.02em;
+      }
+      .bien-action-btn {
+        width: 100%;
+        border-radius: 10px;
+        padding: 11px 18px;
+        font-weight: 700;
+        border-width: 1px;
+        text-shadow: 0 1px 0 rgba(0, 0, 0, 0.2);
+        transition: transform 0.08s ease, box-shadow 0.08s ease, filter 0.2s ease;
+      }
+      .bien-action-btn:hover,
+      .bien-action-btn:focus {
+        filter: brightness(1.04);
+        transform: translateY(-1px);
+      }
+      .bien-action-btn:active {
+        transform: translateY(2px);
+      }
+      .bien-query-btn {
+        color: #fff;
+        border-color: var(--bien-blue-deep);
+        background: linear-gradient(180deg, #4f98d8 0%, var(--bien-blue) 55%, var(--bien-blue-deep) 100%);
+        box-shadow: 0 4px 0 #18456f, 0 8px 16px rgba(31, 91, 143, 0.25);
+      }
+      .bien-query-btn:hover,
+      .bien-query-btn:focus {
+        box-shadow: 0 5px 0 #18456f, 0 10px 16px rgba(31, 91, 143, 0.24);
+      }
+      .bien-query-btn:active {
+        box-shadow: 0 2px 0 #18456f, 0 4px 8px rgba(31, 91, 143, 0.2);
+      }
+      .bien-random-btn {
+        color: #fff;
+        border-color: var(--bien-green-deep);
+        background: linear-gradient(180deg, #9acf6d 0%, var(--bien-green) 55%, var(--bien-green-deep) 100%);
+        box-shadow: 0 4px 0 #386620, 0 8px 16px rgba(62, 112, 36, 0.24);
+      }
+      .bien-random-btn:hover,
+      .bien-random-btn:focus {
+        box-shadow: 0 5px 0 #386620, 0 10px 16px rgba(62, 112, 36, 0.22);
+      }
+      .bien-random-btn:active {
+        box-shadow: 0 2px 0 #386620, 0 4px 8px rgba(62, 112, 36, 0.18);
+      }
+      .bien-help-btn {
+        color: #1f4f73;
+        text-shadow: none;
+        border-color: #92b7d6;
+        background: linear-gradient(180deg, #f8fcff 0%, #edf6ff 100%);
+        box-shadow: 0 3px 0 #bfd4e7, 0 8px 14px rgba(34, 88, 128, 0.12);
+      }
+      .bien-help-btn:hover,
+      .bien-help-btn:focus {
+        color: #163d5a;
+        box-shadow: 0 4px 0 #bfd4e7, 0 10px 14px rgba(34, 88, 128, 0.14);
+      }
+      .bien-help-btn:active {
+        box-shadow: 0 2px 0 #bfd4e7, 0 4px 8px rgba(34, 88, 128, 0.1);
+      }
     "))
   ),
   tags$div(
-    class = "bien-app-header",
+    class = "page-header",
     tags$div(
-      tags$h2(class = "bien-title", "BIEN Species-Level Observation Explorer")
-    ),
-    tags$div(
-      class = "bien-logo-wrap",
+      class = "bien-header-brand",
       tags$img(
         src = "bien.png",
         class = "bien-logo",
         alt = "BIEN logo",
-        onerror = "this.parentElement.style.display='none';"
+        onerror = "this.style.display='none';"
       ),
-      tags$div(class = "bien-logo-fallback", "")
+      tags$div(
+        class = "bien-header-copy",
+        tags$h1(class = "bien-title", "Species-Level Observation Explorer"),
+        tags$p(
+          class = "bien-subtitle",
+          "Query BIEN species occurrences, traits, and range evidence with the same visual language as the BIEN Traits portal."
+        )
+      )
     )
   ),
   sidebarLayout(
     sidebarPanel(
-      fluidRow(
-        column(
-          8,
-          textInput("species", "Species name", value = STARTUP_SPECIES, placeholder = "Genus species")
-        ),
-        column(
-          4,
-          tags$div(
-            style = "margin-top:25px;",
-            actionButton("feeling_lucky_species", "random species", class = "btn-success btn-sm", style = "width:100%;white-space:normal;word-break:break-word;line-height:1.2;padding:6px 8px;")
+      div(
+        class = "bien-species-input",
+        selectizeInput(
+          "species",
+          "Species name",
+          choices = STARTUP_SPECIES,
+          selected = STARTUP_SPECIES,
+          width = "100%",
+          options = list(
+            create = TRUE,
+            createOnBlur = TRUE,
+            maxOptions = 2000,
+            placeholder = "Start typing accepted BIEN species names..."
           )
         )
       ),
+      actionButton("feeling_lucky_species", "Random species", class = "btn btn-success btn-lg bien-action-btn bien-random-btn"),
       checkboxInput("enable_taxon_autocorrect", "Suggest closest BIEN taxon if no exact match", value = TRUE),
       uiOutput("spelling_suggestion_ui"),
-      actionButton("run_query", "Query BIEN", class = "btn-primary", style = "min-width:130px;"),
+      actionButton("run_query", "Query BIEN", class = "btn btn-primary btn-lg bien-action-btn bien-query-btn"),
       tags$div(
         style = "margin:10px 0 12px 0;",
-        actionButton("open_tab_help", "Help", class = "btn-info btn-sm", style = "margin-left:6px;padding-left:14px;padding-right:14px;")
+        actionButton("open_tab_help", "Help", class = "btn btn-info btn-lg bien-action-btn bien-help-btn")
       ),
       uiOutput("retry_bien_ui"),
-      tags$script(HTML("$(document).on('keydown', '#species', function(e) { if (e.key === 'Enter') { $('#run_query').click(); return false; } });")),
+      tags$script(HTML("$(document).on('keydown', '#species-selectized', function(e) { if (e.key === 'Enter') { $('#run_query').click(); return false; } });")),
       tags$script(HTML(
         "(function() {
           function bindFallbackTip(el) {
@@ -2108,6 +2676,42 @@ ui <- fluidPage(
           verbatimTextOutput("trait_query_code")
         ),
         tabPanel(
+          "Ingest to BIEN",
+          br(),
+          tags$p(
+            style = "color:#555;max-width:980px;",
+            "Upload multiple CSV files (for example, plot metadata + field survey records). The app maps columns to Darwin Core and BIEN-like fields, suggests a merge key, builds a flat merged table, runs TNRS-like taxon normalization and coordinate QA, then creates a staging-table preview for BIEN loading."
+          ),
+          fileInput(
+            "ingest_files",
+            "Select one or more CSV files",
+            multiple = TRUE,
+            accept = c("text/csv", ".csv")
+          ),
+          actionButton("analyze_ingest_files", "Analyze, Merge, and Build Staging Table", class = "btn-primary"),
+          br(), br(),
+          uiOutput("ingest_merge_suggestion"),
+          br(),
+          tags$h4("Uploaded File Summary"),
+          DTOutput("ingest_file_summary"),
+          br(),
+          tags$h4("Column Mapping (Darwin Core + BIEN)"),
+          DTOutput("ingest_column_map"),
+          br(),
+          tags$h4("Merge Candidate Keys"),
+          DTOutput("ingest_merge_candidates"),
+          br(),
+          tags$h4("Merged Flat Table Preview"),
+          DTOutput("ingest_merged_preview"),
+          br(),
+          tags$h4("BIEN Staging Table Preview"),
+          DTOutput("ingest_staging_preview"),
+          br(),
+          downloadButton("download_ingest_merged", "Download merged flat CSV", class = "btn btn-default btn-sm"),
+          tags$span("\u00A0"),
+          downloadButton("download_ingest_staging", "Download staging CSV", class = "btn btn-default btn-sm")
+        ),
+        tabPanel(
           "Species External Links",
           br(),
           tags$p(
@@ -2131,8 +2735,11 @@ server <- function(input, output, session) {
   summary_cache_nonce <- reactiveVal(0L)
   trait_cache <- new.env(parent = emptyenv())
   range_cache <- new.env(parent = emptyenv())
+  taxonomy_presence_cache <- new.env(parent = emptyenv())
   manual_query_nonce <- reactiveVal(0L)
   last_lucky_species <- reactiveVal(NULL)
+  ingest_bundle <- reactiveVal(NULL)
+  species_select_choices <- reactiveVal(STARTUP_SPECIES)
 
   build_preloaded_startup_result <- function() {
     data_dir <- file.path(getwd(), "sample_data")
@@ -2200,6 +2807,57 @@ server <- function(input, output, session) {
   }
 
   startup_preloaded_result <- build_preloaded_startup_result()
+
+  update_species_select_input <- function(selected_species, choices = NULL) {
+    selected_species <- normalize_species_name(selected_species)
+    current_choices <- isolate(species_select_choices())
+
+    if (is.null(choices) || length(choices) == 0) {
+      choices <- current_choices
+    }
+
+    choices <- unique(c(selected_species, as.character(choices)))
+    choices <- choices[!is.na(choices) & nzchar(choices)]
+    species_select_choices(choices)
+
+    updateSelectizeInput(
+      session,
+      "species",
+      choices = choices,
+      selected = selected_species,
+      server = TRUE,
+      options = list(
+        create = FALSE,
+        maxOptions = 2000,
+        placeholder = "Start typing accepted BIEN species names..."
+      )
+    )
+  }
+
+  taxonomy_species_exists <- function(species_name, timeout_sec = 20) {
+    species_key <- tolower(normalize_species_name(species_name))
+    if (!nzchar(species_key)) {
+      return(FALSE)
+    }
+
+    if (exists(species_key, envir = taxonomy_presence_cache, inherits = FALSE)) {
+      return(get(species_key, envir = taxonomy_presence_cache, inherits = FALSE))
+    }
+
+    tax_res <- safe_bien_call(BIEN_taxonomy_species(species_name), timeout_sec = timeout_sec)
+    found <- is.data.frame(tax_res) && nrow(tax_res) > 0
+    assign(species_key, found, envir = taxonomy_presence_cache)
+    found
+  }
+
+  observeEvent(TRUE, {
+    choices <- load_accepted_species_suggestions(timeout_sec = 60)
+    if (length(choices) == 0) {
+      choices <- STARTUP_SPECIES
+    }
+
+    update_species_select_input(STARTUP_SPECIES, choices = choices)
+  }, once = TRUE)
 
   observeEvent(input$open_tab_help, {
     active_tab <- if (is.null(input$main_tabs)) "Occurrence" else input$main_tabs
@@ -2628,7 +3286,7 @@ server <- function(input, output, session) {
       updateNumericInput(session, "query_timeout", value = min(15, max(10, as.numeric(input$query_timeout))))
       updateCheckboxInput(session, "only_plot_observations", value = FALSE)
       last_lucky_species(lucky$species)
-      updateTextInput(session, "species", value = lucky$species)
+      update_species_select_input(lucky$species)
       showNotification(
         paste0("Random species selected: ", lucky$species, " (range-map verified). Plot-only filtering was turned off for this run."),
         type = "message",
@@ -2829,6 +3487,8 @@ server <- function(input, output, session) {
 
   observeEvent(bien_results_live(), {
     res <- bien_results_live()
+    occ_n <- if (is.data.frame(res$occurrences)) nrow(res$occurrences) else 0
+    mappable_n <- if (is.list(res$occurrences_prepared) && is.data.frame(res$occurrences_prepared$data)) nrow(res$occurrences_prepared$data) else 0
 
     if (isTRUE(res$use_default_filter_profile) && identical(res$occ_strategy, "fallback_relaxed_geo")) {
       showNotification(
@@ -2843,6 +3503,40 @@ server <- function(input, output, session) {
         "Conservative default profile remained selected, but this query auto-relaxed native-only constraints after strict timeout to recover records.",
         type = "warning",
         duration = 10
+      )
+    }
+
+    if (mappable_n == 0 && !is_bien_connection_error(res$query_errors) && isTRUE(taxonomy_species_exists(res$species, timeout_sec = 20))) {
+      likely_filters <- character()
+      if (isTRUE(res$use_default_filter_profile) || (isTRUE(res$use_introduced_filter) && isTRUE(res$natives_only))) {
+        likely_filters <- c(likely_filters, "native-only")
+      }
+      if (isTRUE(res$use_default_filter_profile) || isTRUE(res$only_geovalid)) {
+        likely_filters <- c(likely_filters, "geovalid-only coordinates")
+      }
+      if (isTRUE(res$use_cultivated_filter) && !isTRUE(res$include_cultivated)) {
+        likely_filters <- c(likely_filters, "non-cultivated only")
+      }
+
+      filter_text <- if (length(likely_filters) > 0) {
+        paste("Most likely filters excluding map points right now:", paste(likely_filters, collapse = ", "), ".")
+      } else {
+        "Current filters are excluding all mappable points."
+      }
+
+      map_hint <- if (occ_n == 0) {
+        "Try relaxing native-only and/or geovalid filters, then query again."
+      } else {
+        "Records were returned, but none have map-valid coordinates under the current filters."
+      }
+      showNotification(
+        paste(
+          "Name found in BIEN taxonomy, but no mappable occurrence points under current filters.",
+          filter_text,
+          map_hint
+        ),
+        type = "warning",
+        duration = 12
       )
     }
 
@@ -2869,7 +3563,7 @@ server <- function(input, output, session) {
     }
 
     forced_query_species(suggestion$suggested_name)
-    updateTextInput(session, "species", value = suggestion$suggested_name)
+    update_species_select_input(suggestion$suggested_name)
     session$onFlushed(function() {
       manual_query_nonce(isolate(manual_query_nonce()) + 1L)
       query_trigger("run")
@@ -3030,6 +3724,116 @@ server <- function(input, output, session) {
 
     build_plot_repro_script(res)
   })
+
+  observeEvent(input$analyze_ingest_files, {
+    req(input$ingest_files)
+
+    withProgress(message = "Running ingest pipeline", detail = "Reading files and mapping columns", value = 0, {
+      incProgress(0.25, detail = "Mapping Darwin Core and BIEN fields")
+      ingest_res <- run_ingest_workflow(input$ingest_files)
+
+      if (is.null(ingest_res)) {
+        showNotification("No non-empty CSV tables were detected in the uploaded files.", type = "warning", duration = 8)
+        ingest_bundle(NULL)
+        return(NULL)
+      }
+
+      incProgress(0.65, detail = "Building merged flat table and TNRS/coordinate augmentation")
+      ingest_bundle(ingest_res)
+      incProgress(1, detail = "Ingest analysis complete")
+    })
+  }, ignoreInit = TRUE)
+
+  output$ingest_merge_suggestion <- renderUI({
+    bundle <- ingest_bundle()
+    if (is.null(bundle)) {
+      return(tags$div(style = "color:#666;", "Upload CSV files and click Analyze to generate mapping and merge suggestions."))
+    }
+
+    key_txt <- if (!is.null(bundle$merge_key) && nzchar(bundle$merge_key)) bundle$merge_key else "No high-confidence key found"
+    bien_check_txt <- if (isTRUE(bundle$bien_schema_check)) {
+      "Merged schema is identical to BIEN reference fields (strict check)."
+    } else if (isFALSE(bundle$bien_schema_check)) {
+      "Merged schema differs from strict BIEN reference fields; staging preview includes normalized BIEN-ready columns."
+    } else {
+      "BIEN strict schema comparison not available for this run."
+    }
+
+    tags$div(
+      style = "background:#eef6ff;border:1px solid #b7d2e8;color:#1e4f78;padding:10px 12px;border-radius:6px;",
+      tags$strong("Suggested merge key: "), key_txt,
+      tags$br(),
+      tags$strong("RBIEN schema check: "), bien_check_txt
+    )
+  })
+
+  output$ingest_file_summary <- renderDT({
+    bundle <- ingest_bundle()
+    if (is.null(bundle) || !is.data.frame(bundle$file_summary)) {
+      return(datatable(data.frame(message = "No ingest summary available."), options = list(dom = "t"), rownames = FALSE))
+    }
+    datatable(bundle$file_summary, options = list(pageLength = 10, scrollX = TRUE), rownames = FALSE)
+  })
+
+  output$ingest_column_map <- renderDT({
+    bundle <- ingest_bundle()
+    if (is.null(bundle) || !is.data.frame(bundle$column_map)) {
+      return(datatable(data.frame(message = "No column mapping available."), options = list(dom = "t"), rownames = FALSE))
+    }
+    datatable(bundle$column_map, filter = "top", options = list(pageLength = 15, scrollX = TRUE), rownames = FALSE)
+  })
+
+  output$ingest_merge_candidates <- renderDT({
+    bundle <- ingest_bundle()
+    if (is.null(bundle) || !is.data.frame(bundle$merge_candidates) || nrow(bundle$merge_candidates) == 0) {
+      return(datatable(data.frame(message = "No merge-key candidates identified."), options = list(dom = "t"), rownames = FALSE))
+    }
+    datatable(bundle$merge_candidates, options = list(pageLength = 10, scrollX = TRUE), rownames = FALSE)
+  })
+
+  output$ingest_merged_preview <- renderDT({
+    bundle <- ingest_bundle()
+    if (is.null(bundle) || !is.data.frame(bundle$merged)) {
+      return(datatable(data.frame(message = "No merged table available."), options = list(dom = "t"), rownames = FALSE))
+    }
+    datatable(utils::head(bundle$merged, 200), options = list(pageLength = 10, scrollX = TRUE), rownames = FALSE)
+  })
+
+  output$ingest_staging_preview <- renderDT({
+    bundle <- ingest_bundle()
+    if (is.null(bundle) || !is.data.frame(bundle$staging)) {
+      return(datatable(data.frame(message = "No staging table available."), options = list(dom = "t"), rownames = FALSE))
+    }
+    datatable(utils::head(bundle$staging, 200), options = list(pageLength = 10, scrollX = TRUE), rownames = FALSE)
+  })
+
+  output$download_ingest_merged <- downloadHandler(
+    filename = function() {
+      paste0("bien_ingest_merged_", format(Sys.time(), "%Y%m%d_%H%M%S"), ".csv")
+    },
+    content = function(file) {
+      bundle <- ingest_bundle()
+      if (is.null(bundle) || !is.data.frame(bundle$merged)) {
+        write.csv(data.frame(message = "No merged table available."), file, row.names = FALSE)
+        return(NULL)
+      }
+      write.csv(bundle$merged, file, row.names = FALSE)
+    }
+  )
+
+  output$download_ingest_staging <- downloadHandler(
+    filename = function() {
+      paste0("bien_ingest_staging_", format(Sys.time(), "%Y%m%d_%H%M%S"), ".csv")
+    },
+    content = function(file) {
+      bundle <- ingest_bundle()
+      if (is.null(bundle) || !is.data.frame(bundle$staging)) {
+        write.csv(data.frame(message = "No staging table available."), file, row.names = FALSE)
+        return(NULL)
+      }
+      write.csv(bundle$staging, file, row.names = FALSE)
+    }
+  )
 
   output$species_external_links <- renderUI({
     res <- bien_results()
@@ -3917,24 +4721,34 @@ server <- function(input, output, session) {
     prepared <- bundle$prepared
     mappable_n <- if (is.list(prepared) && is.data.frame(prepared$data)) nrow(prepared$data) else 0
 
+    # Timeout/blank map guidance message
+    timeout_or_blank <- FALSE
+    timeout_msg <- NULL
+    # Check for timeout or zero results
     if (!is.data.frame(res$occurrences) || nrow(res$occurrences) == 0) {
-      return(tags$div(
-        style = "background:#f8d7da;border:1px solid #f1aeb5;color:#842029;padding:8px 10px;border-radius:6px;margin:8px 0;",
-        "No occurrence rows are loaded yet for this species."
-      ))
+      timeout_or_blank <- TRUE
+      timeout_msg <- "No occurrence rows are loaded yet for this species. This may be due to a temporary timeout or strict filter settings."
+    } else if (!is.data.frame(plot_df) || nrow(plot_df) == 0) {
+      timeout_or_blank <- TRUE
+      timeout_msg <- "No records were categorized as Plot / survey for the current species and filters. Try another species or broaden filters."
+    } else if (mappable_n == 0) {
+      timeout_or_blank <- TRUE
+      timeout_msg <- paste0("Plot / survey records found (", nrow(plot_df), "), but none currently have usable coordinates for mapping.")
     }
 
-    if (!is.data.frame(plot_df) || nrow(plot_df) == 0) {
+    if (timeout_or_blank) {
       return(tags$div(
-        style = "background:#fff3cd;border:1px solid #ffe69c;color:#664d03;padding:8px 10px;border-radius:6px;margin:8px 0;",
-        "No records were categorized as Plot / survey for the current species and filters. Try another species or broaden filters."
-      ))
-    }
-
-    if (mappable_n == 0) {
-      return(tags$div(
-        style = "background:#cff4fc;border:1px solid #9eeaf9;color:#055160;padding:8px 10px;border-radius:6px;margin:8px 0;",
-        paste0("Plot / survey records found (", nrow(plot_df), "), but none currently have usable coordinates for mapping.")
+        style = "background:#f8d7da;border:2px solid #f1aeb5;color:#842029;padding:12px 14px;border-radius:8px;margin:10px 0;font-size:1.08em;",
+        tags$p(timeout_msg),
+        tags$p(
+          style = "margin-top:8px;",
+          tags$strong("Tip: "),
+          "If you encountered a timeout or blank map, don't give up! Try clicking ",
+          tags$code("Query BIEN"),
+          " again, or try unchecking the ",
+          tags$strong("Conservative default profile ⓘ"),
+          " box above and rerun your query. This often recovers results for challenging species."
+        )
       ))
     }
 
