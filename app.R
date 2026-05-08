@@ -506,8 +506,9 @@ find_lucky_species_with_mappable_points <- function(input, min_mappable_points =
       "AND lower(coalesce(observation_type, '')) NOT LIKE '%measurement%'",
       "GROUP BY scrubbed_species_binomial",
       "HAVING COUNT(*) >=", as.integer(min_observations),
-      "ORDER BY random()",
-      "LIMIT", as.integer(pool_size), ";"
+      # No ORDER BY random() — that forces a full-table sort on 100M+ rows.
+      # Fetch a larger natural-order pool and shuffle client-side with sample().
+      "LIMIT", as.integer(pool_size * 5L), ";"
     )
 
     res <- safe_bien_call(
@@ -532,6 +533,10 @@ find_lucky_species_with_mappable_points <- function(input, min_mappable_points =
     )
     out <- out[!is.na(out$species) & nzchar(out$species), , drop = FALSE]
     out <- out[!duplicated(tolower(out$species)), , drop = FALSE]
+    # R-side shuffle: cheaper than ORDER BY random() on a large BIEN table.
+    if (nrow(out) > pool_size) {
+      out <- out[sample.int(nrow(out), pool_size), , drop = FALSE]
+    }
     out
   }
 
@@ -1507,6 +1512,13 @@ build_preloaded_startup_result <- function() {
 
 startup_preloaded_result <- build_preloaded_startup_result()
 
+# Preload the accepted-species autocomplete list once at app launch (global scope)
+# so every new session gets instant autocomplete without a 60-sec per-session block.
+startup_species_suggestions <- load_accepted_species_suggestions(timeout_sec = 60)
+if (length(startup_species_suggestions) == 0) {
+  startup_species_suggestions <- STARTUP_SPECIES
+}
+
 parse_collection_year <- function(date_str) {
   if (is.null(date_str) || is.na(date_str) || !nzchar(as.character(date_str))) {
     return(NA_integer_)
@@ -2001,7 +2013,7 @@ ui <- fluidPage(
         checkboxInput("use_introduced_filter", compact_label("Filter by native vs introduced", "Controls whether establishment status is enforced. If disabled, records are kept regardless of native or introduced status."), value = TRUE),
         conditionalPanel(
           condition = "input.use_introduced_filter == true",
-          checkboxInput("natives_only", compact_label("Keep native only", "When enabled, retains native records and excludes BIEN records marked introduced."), value = TRUE)
+          checkboxInput("natives_only", compact_label("Keep native / unknown-status only", "When enabled, retains records where BIEN classifies the species as native or where introduced status is unclassified (is_introduced IS NULL). Records explicitly marked introduced are excluded."), value = TRUE)
         ),
         checkboxInput("use_cultivated_filter", compact_label("Filter by cultivated vs wild", "Controls whether cultivation status is enforced. If disabled, both cultivated and non-cultivated records are retained."), value = TRUE),
         conditionalPanel(
@@ -2327,7 +2339,17 @@ ui <- fluidPage(
           tags$h4("Plot Community Summary"),
           uiOutput("community_summary")
         ),
-        tabPanel("Range", br(), verbatimTextOutput("range_text"), leafletOutput("range_map", height = 500)),
+        tabPanel("Range", br(),
+          tags$div(
+            style = "background:#fff3cd;border:1px solid #ffe69c;color:#664d03;padding:8px 12px;border-radius:6px;margin-bottom:10px;font-size:0.9em;",
+            tags$strong("Model caveat: "),
+            "BIEN range polygons are outputs of species distribution models (SDMs), not surveyed or verified native range boundaries. ",
+            "They represent modeled habitat suitability under the assumptions of the underlying SDM, which may over- or under-predict ",
+            "the realized range. Treat them as coarse biogeographic reference layers, not as authoritative range maps."
+          ),
+          verbatimTextOutput("range_text"),
+          leafletOutput("range_map", height = 500)
+        ),
         tabPanel(
           "Download",
           br(),
@@ -2420,12 +2442,8 @@ server <- function(input, output, session) {
   }
 
   observeEvent(TRUE, {
-    choices <- load_accepted_species_suggestions(timeout_sec = 60)
-    if (length(choices) == 0) {
-      choices <- STARTUP_SPECIES
-    }
-
-    update_species_select_input(STARTUP_SPECIES, choices = choices)
+    # Use globally preloaded suggestions (loaded once at app launch) — no per-session BIEN call needed.
+    update_species_select_input(STARTUP_SPECIES, choices = startup_species_suggestions)
   }, once = TRUE)
 
   observeEvent(input$open_tab_help, {
@@ -2450,7 +2468,7 @@ server <- function(input, output, session) {
       tags$div(
         style = "background:#e8f5e9;border:1px solid #b7dfb9;color:#1b5e20;padding:8px 10px;border-radius:6px;margin:10px 0 0 0;font-size:0.92em;",
         tags$strong("Default (conservative ecological view): "),
-        "Showing BIEN-classified native / not introduced records only; cultivated records hidden; only BIEN geovalid coordinates shown; all observation-source categories retained (including field observation / citizen science); and all observation categories (plot + non-plot) retained.",
+        "Showing BIEN records where species is classified as native or introduced status is unclassified (confirmed native + unknown status — records explicitly marked introduced are excluded); cultivated records hidden; only BIEN geovalid coordinates shown; all observation-source categories retained (including field observation / citizen science); and all observation categories (plot + non-plot) retained.",
         tags$br(),
         "This is the app's default starting view for biodiversity screening. If BIEN finds no records under these strict settings, the summary section below the map will report whether the app had to broaden the actual query strategy."
       ),
@@ -2812,7 +2830,40 @@ server <- function(input, output, session) {
     if (is.null(cache_key) || !exists(cache_key, envir = cache_env, inherits = FALSE)) {
       return(NULL)
     }
+    # Update LRU timestamp on access.
+    attr(cache_env, "lru_times")[[cache_key]] <- Sys.time()
     get(cache_key, envir = cache_env, inherits = FALSE)
+  }
+
+  # Evict the least-recently-used entry when the cache exceeds max_keys.
+  evict_lru_cache <- function(cache_env, max_keys = 8L) {
+    keys <- ls(envir = cache_env, all.names = FALSE)
+    if (length(keys) <= max_keys) return(invisible(NULL))
+    times <- attr(cache_env, "lru_times")
+    if (is.null(times)) times <- list()
+    # Assign a very old timestamp to any key with no recorded time.
+    key_times <- vapply(keys, function(k) {
+      t <- times[[k]]
+      if (is.null(t)) as.numeric(Sys.time()) - 1e9 else as.numeric(t)
+    }, numeric(1))
+    n_evict <- length(keys) - max_keys
+    evict_keys <- keys[order(key_times)[seq_len(n_evict)]]
+    for (k in evict_keys) {
+      rm(list = k, envir = cache_env)
+      times[[k]] <- NULL
+    }
+    attr(cache_env, "lru_times") <- times
+    invisible(NULL)
+  }
+
+  set_cache <- function(cache_env, cache_key, value, max_keys = 8L) {
+    assign(cache_key, value, envir = cache_env)
+    lru <- attr(cache_env, "lru_times")
+    if (is.null(lru)) lru <- list()
+    lru[[cache_key]] <- Sys.time()
+    attr(cache_env, "lru_times") <- lru
+    evict_lru_cache(cache_env, max_keys = max_keys)
+    invisible(NULL)
   }
 
   set_summary_cache <- function(cache_key, value) {
@@ -3042,7 +3093,7 @@ server <- function(input, output, session) {
         name_suggestion = name_suggestion
       )
 
-      assign(cache_key, result, envir = query_cache)
+      set_cache(query_cache, cache_key, result)
       result
     })
   }, ignoreInit = TRUE)
@@ -3435,7 +3486,7 @@ server <- function(input, output, session) {
         error = traits_error,
         loaded = TRUE
       )
-      assign(cache_key, out, envir = trait_cache)
+      set_cache(trait_cache, cache_key, out)
       out
     })
   })
@@ -3465,7 +3516,7 @@ server <- function(input, output, session) {
         loaded = FALSE,
         skipped = TRUE
       )
-      assign(cache_key, out, envir = range_cache)
+      set_cache(range_cache, cache_key, out)
       return(out)
     }
 
@@ -3494,7 +3545,7 @@ server <- function(input, output, session) {
         loaded = TRUE,
         skipped = FALSE
       )
-      assign(cache_key, out, envir = range_cache)
+      set_cache(range_cache, cache_key, out)
       out
     })
   })
@@ -3954,11 +4005,11 @@ server <- function(input, output, session) {
       ))
     }
 
-    if (occ_n > 0 && mappable_n == 0 && has_range) {
+      if (occ_n > 0 && mappable_n == 0 && has_range) {
       return(make_notice(
         "background:#fff3cd;border:1px solid #ffe69c;color:#664d03;padding:10px 12px;border-radius:6px;margin:8px 0;",
         "Overview note: ",
-        "BIEN returned occurrence rows for this species, but not usable latitude/longitude coordinates in the current response. The map below is showing the BIEN range polygon instead."
+        "BIEN returned occurrence rows for this species, but not usable latitude/longitude coordinates in the current response. The map below is showing the BIEN range polygon instead. Note: BIEN range polygons are SDM model outputs, not verified native range boundaries — treat as coarse biogeographic reference."
       ))
     }
 

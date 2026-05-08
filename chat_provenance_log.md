@@ -5,14 +5,16 @@ Tracks prompts that created or changed work under this project folder.
 ## Entries
 
 27. Date: 2026-05-08
-Prompt: Implement the security fixes from the agent team review — "SECURITY — Fix before next deployment" (Tier 1).
+Prompt: Implement Tier 1 science and Tier 2 performance fixes — SC-1, SC-2, H1, H2, H3.
 Source session: current workspace session
-Outcome: Three security fixes applied to app.R:
-  (1) C-1 XSS in output$query_summary — added htmltools::htmlEscape() around all BIEN-derived and error-derived strings (occ_total_txt, source_mix_line, category_line, field_obs_source_line, introduced_line, cultivated_line, geovalid_line, range_status, map_status, trait_n, mapped_pct_line, source_mix_mismatch_note, query_source_txt, query_elapsed_txt, effective_query_txt, requested_profile_txt, occ_total_all_note, describe_sampling_mode output).
-  (2) W-9 code injection in repro scripts — replaced dQuote(species_for_code) and dQuote(sample_method) with deparse() in build_occurrence_repro_script(), build_trait_repro_script(), and build_plot_repro_script().
-  (3) NEW-W-1 supply-chain XSS via AsianPlant — added domain allowlist check in get_asianplant_species_url() so only https://asianplant.net URLs pass; all others return NA_character_.
+Outcome: Five fixes applied to app.R:
+  (1) SC-1 accuracy — sidebar checkbox "Keep native only" relabeled to "Keep native / unknown-status only"; tooltip updated; Help modal text updated. Accurately reflects that natives_check_with_null_fallback() includes is_introduced IS NULL records (unclassified), not strictly native-only.
+  (2) SC-2 SDM caveat — added amber warning banner to Range tab UI explicitly stating BIEN range polygons are SDM model outputs, not verified native range boundaries. Updated Overview map fallback notice with same caveat.
+  (3) H1 performance — moved load_accepted_species_suggestions(timeout_sec=60) from per-session observeEvent(TRUE, once=TRUE) to global scope as startup_species_suggestions. Eliminates up to 60s per-session autocomplete stall; all sessions now reuse the preloaded list instantly.
+  (4) H2 performance — removed ORDER BY random() from fetch_random_bien_species_pool() SQL (was a full-table sort on 100M+ rows). Now fetches 5x pool_size in natural order and shuffles with sample.int() in R.
+  (5) H3 performance — added evict_lru_cache() and set_cache() LRU helpers. Replaced bare assign() for query_cache, trait_cache, and range_cache with set_cache() (max 8 keys each). get_cached_result() now records access timestamps for LRU tracking.
 
-26. Date: 2026-05-08
+28. Date: 2026-05-08
 Prompt: For https://benquist.shinyapps.io/bien-species-shinyapp/ The front page when one immediately loads the app, the observation data points for Pinus ponderosa take a long time to load. It would be great if the observation points loaded immediately.
 Source session: current workspace session
 Outcome: Moved `build_preloaded_startup_result()` and its call from inside `server <- function(...)` to global scope (before the server function). Previously this ran per-session, re-reading CSVs, running `categorize_observation_records`, `prepare_occurrences`, and `st_read()` for every new user session. Now it runs once at app launch and the result is shared across all sessions via R's lexical scoping, eliminating the per-session startup delay and making observation points appear immediately on first load.
