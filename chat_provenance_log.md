@@ -224,3 +224,11 @@ Outcome: Replaced the starter-pool precheck loop in `find_lucky_species_with_map
 Prompt: Edit BIEN-SpeciesShinyApp/app.R to address two review warnings and one cleanup: conditional lucky notification by precheck state, neutral zero-mappable wording, and removal of dead taxonomy cache/helper.
 Source session: current workspace session
 Outcome: Updated Lucky notification text to reflect `lucky$precheck` (`range-map verified` vs `fast starter pick; range verification skipped`), replaced zero-mappable opener with neutral filter-based wording, removed `taxonomy_presence_cache` and `taxonomy_species_exists`, and verified `app.R` parse passes.
+
+30. Date: 2026-05-08
+Prompt: Yes (implement suggested changes: U4 copy-link, SC-3 cache-hit badge, D1 zip download).
+Source session: current workspace session
+Outcome: Three features added to app.R (commit f22bcdf, bundle 11967856, image 14900088):
+  (1) U4 — Copy link button: Added '🔗 Copy link' button next to Help using vanilla JS navigator.clipboard.writeText(window.location.href). Shows 1.8s 'Copied!' feedback. Falls back to window.prompt for non-HTTPS contexts. Works with U2 URL state so the copied link pre-loads the same species and tab.
+  (2) SC-3 — Cache-hit badge: query_summary now displays a green '⚡ Cache hit — X.X min old' badge at the top when results come from either the per-session or shared cross-session cache. Badge shows age in minutes computed from shared_bien_cache$cached_at timestamp. Invisible on fresh queries.
+  (3) D1 — ZIP download bundle: New green 'Download all datasets + code (.zip)' button added at the top of the Download tab. Bundles occurrence CSV, trait CSV, plot community CSV + 3 reproducible R scripts into a timestamped .zip file. All CSVs include provenance header block. Uses setwd(tmp_dir) + on.exit cleanup so zip() paths are clean relative paths.
