@@ -4,6 +4,14 @@ Tracks prompts that created or changed work under this project folder.
 
 ## Entries
 
+29. Date: 2026-05-08
+Prompt: Yes, lets implement these changes — implement next-level recommendations: A2 (shared global cache), U3 (download provenance block), S1 (temporal trend plot), A1 (async BIEN queries), U2 (URL state).
+Source session: current workspace session
+Outcome: Three features implemented in app.R (S1 already existed; A1 deferred due to architectural risk):
+  (1) A2 — Shared cross-session cache: Added `shared_bien_cache` environment, `get_shared_cache()`, and `set_shared_cache()` helpers at global scope. Cache uses 30-min TTL (SHARED_CACHE_TTL_SEC=1800L) and evicts oldest entries over 50-key limit. In `bien_results_live()`: session cache is checked first (fastest), then shared global cache (cross-session hit), then a fresh BIEN query which populates both caches. Popular species now warm instantly across all sessions.
+  (2) U3 — Download provenance headers: All three CSV download handlers (occurrence, trait, plot community) now prepend comment lines to the file before writing data. Comments include: species name, UTC download timestamp, filter profile, natives-only and geo-valid flags (occurrence download), BIEN R package version, and app source URL. Uses writeLines() + write.table(append=TRUE) to avoid overwriting CSV headers.
+  (3) U2 — URL state: Startup observeEvent(TRUE, once=TRUE) now reads ?species= and ?tab= URL parameters using parseQueryString(session$clientData$url_search). If species is provided, pre-populates the species input; if tab is provided and valid, switches to that tab. A new observeEvent(list(input$species, input$main_tabs)) observer keeps the URL query string synchronized (mode="replace") so users can copy/share bookmarkable links.
+
 27. Date: 2026-05-08
 Prompt: Implement Tier 1 science and Tier 2 performance fixes — SC-1, SC-2, H1, H2, H3.
 Source session: current workspace session

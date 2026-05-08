@@ -1519,6 +1519,46 @@ if (length(startup_species_suggestions) == 0) {
   startup_species_suggestions <- STARTUP_SPECIES
 }
 
+# ---------------------------------------------------------------------------
+# Shared cross-session cache (global scope)
+# A30-min TTL cache shared across all sessions so popular species are never
+# re-queried from BIEN while a warm result exists.  R assignment is
+# single-threaded so this is race-safe on shinyapps.io's single-process model.
+# ---------------------------------------------------------------------------
+SHARED_CACHE_TTL_SEC  <- 1800L   # 30 minutes
+SHARED_CACHE_MAX_KEYS <- 50L
+
+shared_bien_cache <- new.env(parent = emptyenv())
+
+get_shared_cache <- function(cache_key) {
+  if (is.null(cache_key) ||
+      !exists(cache_key, envir = shared_bien_cache, inherits = FALSE)) {
+    return(NULL)
+  }
+  entry <- get(cache_key, envir = shared_bien_cache, inherits = FALSE)
+  age_sec <- as.numeric(difftime(Sys.time(), entry$cached_at, units = "secs"))
+  if (age_sec > SHARED_CACHE_TTL_SEC) {
+    rm(list = cache_key, envir = shared_bien_cache)
+    return(NULL)
+  }
+  entry$value
+}
+
+set_shared_cache <- function(cache_key, value) {
+  assign(cache_key,
+         list(value = value, cached_at = Sys.time()),
+         envir = shared_bien_cache)
+  keys <- ls(envir = shared_bien_cache, all.names = FALSE)
+  if (length(keys) > SHARED_CACHE_MAX_KEYS) {
+    times <- vapply(keys, function(k) {
+      as.numeric(get(k, envir = shared_bien_cache, inherits = FALSE)$cached_at)
+    }, numeric(1))
+    n_evict <- length(keys) - SHARED_CACHE_MAX_KEYS
+    rm(list = keys[order(times)[seq_len(n_evict)]], envir = shared_bien_cache)
+  }
+  invisible(NULL)
+}
+
 parse_collection_year <- function(date_str) {
   if (is.null(date_str) || is.na(date_str) || !nzchar(as.character(date_str))) {
     return(NA_integer_)
@@ -2443,8 +2483,40 @@ server <- function(input, output, session) {
 
   observeEvent(TRUE, {
     # Use globally preloaded suggestions (loaded once at app launch) — no per-session BIEN call needed.
-    update_species_select_input(STARTUP_SPECIES, choices = startup_species_suggestions)
+    # Also honour ?species= and ?tab= URL parameters for shareable bookmarks.
+    url_query <- parseQueryString(session$clientData$url_search)
+    species_from_url <- url_query[["species"]]
+    tab_from_url     <- url_query[["tab"]]
+
+    if (!is.null(species_from_url) && nzchar(species_from_url)) {
+      sp_decoded <- utils::URLdecode(species_from_url)
+      sp_clean   <- normalize_species_name(sp_decoded)
+      update_species_select_input(sp_clean, choices = startup_species_suggestions)
+    } else {
+      update_species_select_input(STARTUP_SPECIES, choices = startup_species_suggestions)
+    }
+
+    valid_tabs <- c("Overview & About", "Occurrence", "Community", "Observations",
+                    "Traits", "Range", "Download", "Species External Links")
+    if (!is.null(tab_from_url) && nzchar(tab_from_url) &&
+        utils::URLdecode(tab_from_url) %in% valid_tabs) {
+      updateTabsetPanel(session, "main_tabs",
+                        selected = utils::URLdecode(tab_from_url))
+    }
   }, once = TRUE)
+
+  # Keep the URL bar in sync with the active species + tab so users can copy/
+  # share a link that restores the same view.  Uses mode = "replace" to avoid
+  # polluting the browser history with every tab click.
+  observeEvent(list(input$species, input$main_tabs), {
+    sp  <- if (!is.null(input$species) && nzchar(input$species)) input$species else ""
+    tab <- if (!is.null(input$main_tabs)) input$main_tabs else "Occurrence"
+    new_qs <- paste0(
+      "?species=", utils::URLencode(sp,  reserved = TRUE),
+      "&tab=",     utils::URLencode(tab, reserved = TRUE)
+    )
+    updateQueryString(new_qs, mode = "replace")
+  }, ignoreInit = FALSE)
 
   observeEvent(input$open_tab_help, {
     active_tab <- if (is.null(input$main_tabs)) "Occurrence" else input$main_tabs
@@ -2982,11 +3054,21 @@ server <- function(input, output, session) {
       sep = "||"
     )
 
+    # 1. Per-session cache (fastest — no TTL needed within one session).
     if (exists(cache_key, envir = query_cache, inherits = FALSE)) {
       cached_res <- get(cache_key, envir = query_cache, inherits = FALSE)
       cached_res$cache_hit <- TRUE
       cached_res$query_elapsed_sec <- 0
       return(cached_res)
+    }
+
+    # 2. Cross-session shared cache (warm results from other sessions, TTL=30 min).
+    shared_hit <- get_shared_cache(cache_key)
+    if (!is.null(shared_hit)) {
+      shared_hit$cache_hit <- TRUE
+      shared_hit$query_elapsed_sec <- 0
+      set_cache(query_cache, cache_key, shared_hit)   # promote to session cache
+      return(shared_hit)
     }
 
     query_started <- Sys.time()
@@ -3094,6 +3176,7 @@ server <- function(input, output, session) {
       )
 
       set_cache(query_cache, cache_key, result)
+      set_shared_cache(cache_key, result)   # warm the cross-session cache
       result
     })
   }, ignoreInit = TRUE)
@@ -3248,7 +3331,21 @@ server <- function(input, output, session) {
         write.csv(data.frame(message = "No occurrence dataset available for download."), file, row.names = FALSE)
         return(NULL)
       }
-      write.csv(res$occurrences, file, row.names = FALSE)
+      provenance_lines <- c(
+        "# BIEN Species App - occurrence dataset download",
+        paste0("# Species: ", if (!is.null(res$species)) res$species else "unknown"),
+        paste0("# Download date (UTC): ", format(Sys.time(), "%Y-%m-%d %H:%M:%S", tz = "UTC")),
+        paste0("# Filter profile: ", if (isTRUE(res$use_default_filter_profile)) "conservative default" else "custom"),
+        paste0("# Natives only: ", if (!is.null(res$natives_only)) res$natives_only else "unknown"),
+        paste0("# Geo-validated only: ", if (!is.null(res$only_geovalid)) res$only_geovalid else "unknown"),
+        paste0("# Occurrence strategy: ", if (!is.null(res$occ_strategy)) res$occ_strategy else "unknown"),
+        paste0("# BIEN R package: ", as.character(packageVersion("BIEN"))),
+        paste0("# App source: https://github.com/benquist/BIEN-SpeciesShinyApp"),
+        ""
+      )
+      writeLines(provenance_lines, con = file)
+      write.table(res$occurrences, file, row.names = FALSE, col.names = TRUE,
+                  sep = ",", append = TRUE, na = "")
     }
   )
 
@@ -3271,13 +3368,24 @@ server <- function(input, output, session) {
       paste0(species_safe, "_trait_dataset.csv")
     },
     content = function(file) {
+      res <- bien_results()
       trait_bundle <- trait_results()
       traits_df <- trait_bundle$data
       if (!is.data.frame(traits_df)) {
         write.csv(data.frame(message = "No trait dataset available for download."), file, row.names = FALSE)
         return(NULL)
       }
-      write.csv(traits_df, file, row.names = FALSE)
+      provenance_lines <- c(
+        "# BIEN Species App - trait dataset download",
+        paste0("# Species: ", if (!is.null(res$species)) res$species else "unknown"),
+        paste0("# Download date (UTC): ", format(Sys.time(), "%Y-%m-%d %H:%M:%S", tz = "UTC")),
+        paste0("# BIEN R package: ", as.character(packageVersion("BIEN"))),
+        paste0("# App source: https://github.com/benquist/BIEN-SpeciesShinyApp"),
+        ""
+      )
+      writeLines(provenance_lines, con = file)
+      write.table(traits_df, file, row.names = FALSE, col.names = TRUE,
+                  sep = ",", append = TRUE, na = "")
     }
   )
 
@@ -3295,7 +3403,17 @@ server <- function(input, output, session) {
         write.csv(data.frame(message = "No Plot / survey dataset available for download under current filters."), file, row.names = FALSE)
         return(NULL)
       }
-      write.csv(plot_df, file, row.names = FALSE)
+      provenance_lines <- c(
+        "# BIEN Species App - plot community dataset download",
+        paste0("# Species: ", if (!is.null(res$species)) res$species else "unknown"),
+        paste0("# Download date (UTC): ", format(Sys.time(), "%Y-%m-%d %H:%M:%S", tz = "UTC")),
+        paste0("# BIEN R package: ", as.character(packageVersion("BIEN"))),
+        paste0("# App source: https://github.com/benquist/BIEN-SpeciesShinyApp"),
+        ""
+      )
+      writeLines(provenance_lines, con = file)
+      write.table(plot_df, file, row.names = FALSE, col.names = TRUE,
+                  sep = ",", append = TRUE, na = "")
     }
   )
 
