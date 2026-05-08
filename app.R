@@ -165,7 +165,22 @@ find_best_species_spelling <- function(species_name, timeout_sec = 20) {
   }
 
   genus <- parts[1]
-  genus_rows <- safe_bien_call(BIEN_taxonomy_genus(genus), timeout_sec = min(timeout_sec, 20))
+  # Use a direct SQL query with LIMIT instead of BIEN_taxonomy_genus(genus).
+  # BIEN_taxonomy_genus() for large genera (e.g. Arctostaphylos, 60+ spp) can
+  # return very slowly and exceed R's setTimeLimit interrupt window, hanging
+  # the app. Querying bien_taxonomy directly with a LIKE prefix and LIMIT 250
+  # is fast and returns more than enough candidates for edit-distance ranking.
+  genus_sql <- paste0(
+    "SELECT DISTINCT scrubbed_species_binomial FROM bien_taxonomy ",
+    "WHERE scrubbed_species_binomial LIKE ", sql_quote_literal(paste0(genus, " %")),
+    " AND scrubbed_species_binomial IS NOT NULL",
+    " AND scrubbed_species_binomial <> ''",
+    " LIMIT 250;"
+  )
+  genus_rows <- safe_bien_call(
+    BIEN:::.BIEN_sql(genus_sql, fetch.query = FALSE),
+    timeout_sec = min(timeout_sec, 8)
+  )
 
   if (inherits(genus_rows, "error")) {
     return(list(status = "lookup_error", message = conditionMessage(genus_rows)))
@@ -223,11 +238,16 @@ find_best_species_spelling <- function(species_name, timeout_sec = 20) {
 }
 
 load_accepted_species_suggestions <- function(timeout_sec = 60) {
+  # NOTE: scrubbed_taxonomic_status = 'Accepted' filter intentionally removed.
+  # BIEN taxonomy stores many species (e.g. Arctostaphylos) with status values
+  # other than 'Accepted' (e.g. lowercase, NULL, or alternate strings), causing
+  # those genera to silently disappear from the autofill. We include all species
+  # with a non-null binomial; the occurrence query itself is the ground truth for
+  # whether a species has BIEN data.
   sql <- paste0(
     "SELECT DISTINCT b.scrubbed_species_binomial AS taxon ",
     "FROM bien_taxonomy b ",
-    "WHERE b.scrubbed_taxonomic_status = 'Accepted' ",
-    "AND b.scrubbed_species_binomial IS NOT NULL ",
+    "WHERE b.scrubbed_species_binomial IS NOT NULL ",
     "AND b.scrubbed_species_binomial <> '' ",
     "ORDER BY b.scrubbed_species_binomial;"
   )
@@ -279,10 +299,11 @@ query_occurrence_randomized <- function(species_name, cultivated = FALSE, native
   collection_ <- BIEN:::.collection_check(FALSE)
   geovalid_ <- BIEN:::.geovalid_check(only_geovalid)
 
-  # Skip randomization for large fetches to avoid expensive ORDER BY random() on massive result sets.
-  # For species like Populus tremuloides (880k+ records), ORDER BY random() can take minutes.
-  # Instead, rely on natural table ordering which is already fairly distributed across datasources.
-  use_randomize <- isTRUE(randomize_order) && limit <= 10000
+  # Skip randomization for large fetches and also for very small-limit fallback plans.
+  # ORDER BY random() LIMIT N requires scoring all matching rows even for tiny N,
+  # which can take minutes on species with 500k+ occurrences (e.g. Solidago canadensis).
+  # For limit <= 500, natural table order + R-side stratified sampling is sufficient.
+  use_randomize <- isTRUE(randomize_order) && limit > 500 && limit <= 10000
   order_clause <- if (use_randomize) "ORDER BY random()" else ""
 
   query <- paste(
@@ -511,6 +532,7 @@ find_lucky_species_with_mappable_points <- function(input, min_mappable_points =
   has_verified_range <- function(candidate) {
     candidate_dir <- file.path(tempdir(), "bien_lucky_ranges", gsub("\\s+", "_", candidate))
     dir.create(candidate_dir, recursive = TRUE, showWarnings = FALSE)
+    on.exit(unlink(candidate_dir, recursive = TRUE), add = TRUE)
 
     range_obj <- safe_bien_call(
       BIEN_ranges_species(
@@ -540,29 +562,9 @@ find_lucky_species_with_mappable_points <- function(input, min_mappable_points =
     starter_pool <- starter_pool[tolower(starter_pool) != tolower(current_species)]
   }
 
-  # Keep the Lucky button non-blocking: pick immediately from a curated starter pool.
   if (length(starter_pool) > 0) {
-    candidate <- sample(starter_pool, size = 1)
-    return(list(status = "ok", species = candidate, mappable_n = NA_integer_, attempts = 1, precheck = "starter_pool_fast_pick"))
-  }
-
-  if (length(starter_pool) > 0) {
-    starter_candidates <- sample(starter_pool, size = length(starter_pool), replace = FALSE)
-    for (i in seq_along(starter_candidates)) {
-      candidate <- starter_candidates[[i]]
-      total_info <- count_occurrence_records(
-        species_name = candidate,
-        cultivated = FALSE,
-        natives_only = TRUE,
-        only_geovalid = TRUE,
-        timeout_sec = min(12, max(8, as.numeric(timeout_sec)))
-      )
-      total_n <- suppressWarnings(as.numeric(total_info$total))
-
-      if (!is.na(total_n) && total_n >= as.numeric(min_observations) && isTRUE(has_verified_range(candidate))) {
-        return(list(status = "ok", species = candidate, mappable_n = NA_integer_, attempts = i, precheck = "starter_pool_range_verified"))
-      }
-    }
+    fast_candidate <- sample(starter_pool, size = 1)
+    return(list(status = "ok", species = fast_candidate[[1]], mappable_n = NA_integer_, attempts = 1, precheck = "starter_pool_fast_pick"))
   }
 
   random_pool <- fetch_random_bien_species_pool(
@@ -1119,20 +1121,22 @@ sample_occurrence_rows <- function(df, target_n, sample_method = "random") {
   if (length(selected) < target_n) {
     leftovers <- lapply(group_index, function(idx) setdiff(idx, selected))
 
-    while (length(selected) < target_n && any(lengths(leftovers) > 0)) {
+    need <- target_n - length(selected)
+    extra_buf <- integer(need)
+    ptr <- 0L
+
+    while (ptr < need && any(lengths(leftovers) > 0)) {
       for (i in seq_along(leftovers)) {
-        if (length(selected) >= target_n) {
-          break
-        }
-        if (length(leftovers[[i]]) == 0) {
-          next
-        }
+        if (ptr >= need) break
+        if (length(leftovers[[i]]) == 0) next
         add_pos <- sample.int(length(leftovers[[i]]), size = 1)
         add_idx <- leftovers[[i]][add_pos]
-        selected <- c(selected, add_idx)
+        ptr <- ptr + 1L
+        extra_buf[ptr] <- add_idx
         leftovers[[i]] <- setdiff(leftovers[[i]], add_idx)
       }
     }
+    selected <- c(selected, extra_buf[seq_len(ptr)])
   }
 
   selected <- selected[seq_len(min(length(selected), target_n))]
@@ -1298,6 +1302,21 @@ read_downloaded_range_sf <- function(range_dir, species_name) {
 # Build a transparent BIEN-returned name summary for the app. This is a provisional
 # reconciliation aid for users, not a formal synonym or accepted-name adjudication.
 build_reconciliation_table <- function(species_name, occ, traits, query_errors, range_obj) {
+  has_real_error <- function(x) {
+    if (length(x) == 0) return(FALSE)
+    error_patterns <- c(
+      "occ_error:", "trait_error:", "range_error:", "error", "timeout",
+      "elapsed time limit", "could not connect", "remaining connection slots",
+      "statement timeout", "failed"
+    )
+    x_lc <- tolower(as.character(x))
+    any(sapply(x_lc, function(s) {
+      !grepl("^occ_strategy=", s, ignore.case = TRUE) &&
+        any(sapply(error_patterns, function(p) grepl(p, s, fixed = TRUE)))
+    }))
+  }
+  query_has_error <- has_real_error(query_errors)
+
   occ_sp_col <- if (is.data.frame(occ)) find_first_col(occ, c("scrubbed_species_binomial", "species", "scientific_name")) else NULL
   trait_sp_col <- if (is.data.frame(traits)) find_first_col(traits, c("scrubbed_species_binomial", "species", "scientific_name")) else NULL
 
@@ -1316,10 +1335,9 @@ build_reconciliation_table <- function(species_name, occ, traits, query_errors, 
     matched_taxon_id = NA_character_,
     matched_backbone = "BIEN",
     matched_status = case_when(
-      length(query_errors) > 0 ~ "error",
-      is.na(matched_species) ~ "unresolved",
-      matched_species == str_squish(species_name) ~ "accepted_or_exact",
-      TRUE ~ "matched_non_exact"
+      is.data.frame(occ) && nrow(occ) > 0 ~ "matched",
+      query_has_error ~ "error",
+      TRUE ~ "no_records"
     ),
     accepted_name = matched_species,
     accepted_taxon_id = NA_character_,
@@ -1414,6 +1432,75 @@ STARTUP_SPECIES <- "Pinus ponderosa"
 STARTUP_SPECIES_SLUG <- gsub("\\s+", "_", tolower(STARTUP_SPECIES))
 STARTUP_CACHE_KEY <- paste0("startup_preloaded_", STARTUP_SPECIES_SLUG)
 
+# Build the preloaded startup result once at app launch (global scope) so every
+# session inherits it immediately without re-reading CSVs or the range shapefile.
+build_preloaded_startup_result <- function() {
+  data_dir <- file.path(getwd(), "sample_data")
+  occ_file <- file.path(data_dir, paste0(STARTUP_SPECIES_SLUG, "_occurrences.csv"))
+  trait_file <- file.path(data_dir, paste0(STARTUP_SPECIES_SLUG, "_traits.csv"))
+  range_file <- file.path(data_dir, paste0(STARTUP_SPECIES_SLUG, "_ranges.csv"))
+
+  if (!file.exists(occ_file) || !file.exists(trait_file)) {
+    return(NULL)
+  }
+
+  occ <- tryCatch(read.csv(occ_file, stringsAsFactors = FALSE), error = function(e) data.frame())
+  traits <- tryCatch(read.csv(trait_file, stringsAsFactors = FALSE), error = function(e) data.frame())
+  ranges <- tryCatch(read.csv(range_file, stringsAsFactors = FALSE), error = function(e) data.frame())
+  startup_range_sf <- read_downloaded_range_sf(getwd(), STARTUP_SPECIES)
+
+  if (!is.data.frame(occ) || nrow(occ) == 0) {
+    return(NULL)
+  }
+
+  occ <- categorize_observation_records(occ)
+  occ_prepared <- prepare_occurrences(occ, map_point_cap = 800, sample_method = "datasource")
+  family_name <- extract_primary_value(occ, c("scrubbed_family", "family", "verbatim_family"))
+  reconciliation_tbl <- build_reconciliation_table(STARTUP_SPECIES, occ, NULL, "startup_preloaded_local_dataset", NULL)
+
+  list(
+    species = STARTUP_SPECIES,
+    family_name = family_name,
+    occurrences = occ,
+    occurrences_prepared = occ_prepared,
+    occurrences_returned = nrow(occ),
+    occ_total_available = NA_real_,
+    occ_total_note = "Startup data loaded from local sample_data files. Click 'Query BIEN' for live BIEN retrieval.",
+    occ_source_mix = NULL,
+    occurrence_sample_mode = "datasource",
+    traits = traits,
+    ranges = ranges,
+    range_sf = startup_range_sf,
+    range_dir = getwd(),
+    include_range_query = TRUE,
+    timeout_sec = 90,
+    occ_limit = 1000,
+    map_point_cap = 800,
+    trait_limit = 1000,
+    occ_fetch_limit = nrow(occ),
+    fast_large_species_mode = TRUE,
+    trait_fetch_limit = nrow(traits),
+    occ_strategy = "startup_preloaded_local_dataset",
+    use_default_filter_profile = TRUE,
+    use_cultivated_filter = TRUE,
+    use_introduced_filter = TRUE,
+    include_cultivated = FALSE,
+    natives_only = TRUE,
+    only_plot_observations = FALSE,
+    only_geovalid = TRUE,
+    exclude_human_observation_records = FALSE,
+    query_cache_key = STARTUP_CACHE_KEY,
+    is_startup_preloaded = TRUE,
+    query_elapsed_sec = 0,
+    cache_hit = TRUE,
+    query_errors = "startup_preloaded_local_dataset",
+    reconciliation = reconciliation_tbl,
+    name_suggestion = NULL
+  )
+}
+
+startup_preloaded_result <- build_preloaded_startup_result()
+
 parse_collection_year <- function(date_str) {
   if (is.null(date_str) || is.na(date_str) || !nzchar(as.character(date_str))) {
     return(NA_integer_)
@@ -1500,412 +1587,9 @@ drop_empty_rows <- function(df) {
   df[keep_idx, , drop = FALSE]
 }
 
-get_dwc_aliases <- function() {
-  list(
-    scientificName = c("scientificName", "species", "species_name", "taxon", "taxon_name", "organism"),
-    decimalLatitude = c("decimalLatitude", "latitude", "lat", "y", "lat_dd"),
-    decimalLongitude = c("decimalLongitude", "longitude", "long", "lon", "x", "long_dd"),
-    plotName = c("plotName", "plot_name", "plot", "site", "site_name", "location"),
-    eventDate = c("eventDate", "date", "date_collected", "collection_date", "sample_date"),
-    occurrenceID = c("occurrenceID", "record_id", "id", "sample_id", "observation_id"),
-    basisOfRecord = c("basisOfRecord", "observation_type", "record_type"),
-    measurementType = c("measurementType", "trait", "trait_name", "variable", "measurement_name"),
-    measurementValue = c("measurementValue", "value", "trait_value", "dbh", "diameter", "measurement"),
-    measurementUnit = c("measurementUnit", "unit", "units", "trait_unit")
-  )
-}
-
-get_bien_reference_fields <- function(timeout_sec = 12) {
-  occ_fields <- character(0)
-  trait_fields <- character(0)
-
-  occ <- safe_bien_call(
-    BIEN_occurrence_species(
-      "Pinus ponderosa",
-      cultivated = FALSE,
-      natives.only = TRUE,
-      only.geovalid = TRUE,
-      all.taxonomy = TRUE,
-      limit = 1,
-      record_limit = 1,
-      fetch.query = FALSE
-    ),
-    timeout_sec = timeout_sec
-  )
-  if (is.data.frame(occ)) {
-    occ_fields <- names(occ)
-  }
-
-  traits <- safe_bien_call(
-    BIEN_trait_species(
-      "Pinus ponderosa",
-      all.taxonomy = TRUE,
-      source.citation = TRUE,
-      limit = 1,
-      record_limit = 1,
-      fetch.query = FALSE
-    ),
-    timeout_sec = timeout_sec
-  )
-  if (is.data.frame(traits)) {
-    trait_fields <- names(traits)
-  }
-
-  fallback_fields <- c(
-    "scrubbed_species_binomial", "scrubbed_family", "scrubbed_genus", "latitude", "longitude",
-    "date_collected", "datasource", "dataset", "dataowner", "collection_code", "trait_name",
-    "trait_value", "unit", "method", "elevation_m", "url_source", "project_pi", "id",
-    "plot_name", "occurrence_id"
-  )
-
-  unique(c(occ_fields, trait_fields, fallback_fields))
-}
-
-lookup_alias_term <- function(col_name, alias_map) {
-  col_norm <- normalize_field_name(col_name)
-  for (term in names(alias_map)) {
-    aliases <- unique(c(term, alias_map[[term]]))
-    alias_norm <- normalize_field_name(aliases)
-    if (col_norm %in% alias_norm) {
-      return(term)
-    }
-  }
-  NA_character_
-}
-
-build_column_mapping <- function(df, source_file, bien_reference_fields) {
-  if (!is.data.frame(df)) {
-    return(data.frame())
-  }
-
-  dwc_alias <- get_dwc_aliases()
-  bien_alias <- list(
-    scrubbed_species_binomial = c("species", "scientific_name", "scientificname", "scientificName", "taxon"),
-    latitude = c("decimalLatitude", "latitude", "lat"),
-    longitude = c("decimalLongitude", "longitude", "long", "lon"),
-    date_collected = c("eventDate", "date", "date_collected", "collection_date"),
-    trait_name = c("measurementType", "trait_name", "trait", "variable", "measurement_name", "dbh"),
-    trait_value = c("measurementValue", "trait_value", "value", "dbh", "diameter"),
-    unit = c("measurementUnit", "trait_unit", "unit", "units"),
-    dataset = c("dataset", "project", "survey", "study")
-  )
-
-  bien_norm <- normalize_field_name(bien_reference_fields)
-  col_names <- names(df)
-  col_norm <- normalize_field_name(col_names)
-
-  mapped_dwc <- vapply(col_names, function(x) lookup_alias_term(x, dwc_alias), character(1))
-  mapped_bien <- vapply(col_names, function(x) {
-    alias_hit <- lookup_alias_term(x, bien_alias)
-    if (!is.na(alias_hit)) {
-      return(alias_hit)
-    }
-
-    this_norm <- normalize_field_name(x)
-    hit_idx <- which(bien_norm == this_norm)
-    if (length(hit_idx) > 0) {
-      return(bien_reference_fields[[hit_idx[[1]]]])
-    }
-
-    NA_character_
-  }, character(1))
-
-  data.frame(
-    source_file = source_file,
-    input_column = col_names,
-    normalized_column = col_norm,
-    mapped_dwc_term = mapped_dwc,
-    mapped_bien_field = mapped_bien,
-    bien_exact_name_match = col_norm %in% bien_norm,
-    stringsAsFactors = FALSE
-  )
-}
-
-suggest_merge_key <- function(mapped_tables, standardized_tables) {
-  if (length(standardized_tables) < 2) {
-    return(list(key = NULL, candidates = data.frame()))
-  }
-
-  all_cols <- unique(unlist(lapply(standardized_tables, names), use.names = FALSE))
-  key_candidates <- all_cols[all_cols %in% c("plotName", "occurrenceID", "scientificName", "scrubbed_species_binomial", "eventDate")]
-  if (length(key_candidates) == 0) {
-    key_candidates <- all_cols
-  }
-
-  cand_tbl <- lapply(key_candidates, function(k) {
-    present_in <- vapply(standardized_tables, function(df) k %in% names(df), logical(1))
-    if (sum(present_in) < 2) {
-      return(NULL)
-    }
-
-    non_missing <- vapply(standardized_tables[present_in], function(df) {
-      vals <- trimws(as.character(df[[k]]))
-      mean(!is.na(vals) & nzchar(vals))
-    }, numeric(1))
-
-    uniqueness <- vapply(standardized_tables[present_in], function(df) {
-      vals <- trimws(as.character(df[[k]]))
-      vals <- vals[!is.na(vals) & nzchar(vals)]
-      if (length(vals) == 0) return(0)
-      length(unique(vals)) / length(vals)
-    }, numeric(1))
-
-    data.frame(
-      candidate_key = k,
-      files_present = sum(present_in),
-      mean_non_missing = round(mean(non_missing), 3),
-      mean_uniqueness = round(mean(uniqueness), 3),
-      score = round(sum(present_in) * mean(non_missing) * mean(uniqueness), 4),
-      stringsAsFactors = FALSE
-    )
-  })
-
-  cand_tbl <- dplyr::bind_rows(cand_tbl)
-  if (!is.data.frame(cand_tbl) || nrow(cand_tbl) == 0) {
-    return(list(key = NULL, candidates = data.frame()))
-  }
-
-  cand_tbl <- cand_tbl %>% arrange(desc(score), desc(files_present), desc(mean_non_missing))
-  list(key = cand_tbl$candidate_key[[1]], candidates = cand_tbl)
-}
-
-standardize_table_columns <- function(df, map_tbl, source_file) {
-  if (!is.data.frame(df) || nrow(df) == 0) {
-    return(df)
-  }
-
-  rename_to <- ifelse(
-    !is.na(map_tbl$mapped_dwc_term) & nzchar(map_tbl$mapped_dwc_term),
-    map_tbl$mapped_dwc_term,
-    ifelse(!is.na(map_tbl$mapped_bien_field) & nzchar(map_tbl$mapped_bien_field), map_tbl$mapped_bien_field, map_tbl$input_column)
-  )
-
-  names(df) <- make.unique(rename_to, sep = "_")
-  df$source_file <- source_file
-  df$source_row_id <- seq_len(nrow(df))
-
-  if ("measurementValue" %in% names(df) && !"measurementType" %in% names(df)) {
-    df$measurementType <- "diameter_at_breast_height"
-  }
-  if ("measurementValue" %in% names(df) && !"measurementUnit" %in% names(df)) {
-    df$measurementUnit <- "cm"
-  }
-
-  df
-}
-
-merge_standardized_tables <- function(std_tables, merge_key) {
-  if (length(std_tables) == 0) {
-    return(data.frame())
-  }
-
-  merged <- std_tables[[1]]
-  if (length(std_tables) == 1) {
-    return(merged)
-  }
-
-  for (i in 2:length(std_tables)) {
-    next_tbl <- std_tables[[i]]
-    common_cols <- intersect(names(merged), names(next_tbl))
-
-    by_cols <- character(0)
-    if (!is.null(merge_key) && nzchar(merge_key) && merge_key %in% common_cols) {
-      by_cols <- merge_key
-    } else if (length(common_cols) > 0) {
-      by_cols <- common_cols[common_cols %in% c("plotName", "occurrenceID", "scientificName", "scrubbed_species_binomial")]
-      if (length(by_cols) > 1) {
-        by_cols <- by_cols[[1]]
-      }
-    }
-
-    if (length(by_cols) == 0) {
-      merged <- dplyr::bind_rows(merged, next_tbl)
-    } else {
-      merged <- dplyr::full_join(merged, next_tbl, by = by_cols)
-    }
-  }
-
-  merged
-}
-
-augment_tnrs_and_coordinates <- function(df, timeout_sec = 8, taxon_cap = 40) {
-  if (!is.data.frame(df) || nrow(df) == 0) {
-    return(df)
-  }
-
-  taxon_col <- find_first_col(df, c("scientificName", "scrubbed_species_binomial", "species", "taxon"))
-  if (!is.null(taxon_col)) {
-    taxa <- unique(trimws(as.character(df[[taxon_col]])))
-    taxa <- taxa[!is.na(taxa) & nzchar(taxa)]
-    taxa <- utils::head(taxa, taxon_cap)
-
-    tax_lookup <- lapply(taxa, function(sp) {
-      tax_res <- safe_bien_call(BIEN_taxonomy_species(sp), timeout_sec = timeout_sec)
-      if (is.data.frame(tax_res) && nrow(tax_res) > 0) {
-        return(data.frame(
-          taxon_submitted = sp,
-          taxon_matched = as.character(tax_res$scrubbed_species_binomial[[1]]),
-          taxon_family = as.character(tax_res$scrubbed_family[[1]]),
-          taxon_match_status = "exact_or_backbone_match",
-          stringsAsFactors = FALSE
-        ))
-      }
-
-      suggestion <- find_best_species_spelling(sp, timeout_sec = timeout_sec)
-      if (is.list(suggestion) && identical(suggestion$status, "suggested")) {
-        return(data.frame(
-          taxon_submitted = sp,
-          taxon_matched = as.character(suggestion$suggested_name),
-          taxon_family = NA_character_,
-          taxon_match_status = paste0("suggested_", suggestion$confidence),
-          stringsAsFactors = FALSE
-        ))
-      }
-
-      data.frame(
-        taxon_submitted = sp,
-        taxon_matched = NA_character_,
-        taxon_family = NA_character_,
-        taxon_match_status = "unresolved",
-        stringsAsFactors = FALSE
-      )
-    })
-
-    tax_lookup <- dplyr::bind_rows(tax_lookup)
-    df$taxon_submitted <- as.character(df[[taxon_col]])
-    df <- dplyr::left_join(df, tax_lookup, by = "taxon_submitted")
-  } else {
-    df$taxon_submitted <- NA_character_
-    df$taxon_matched <- NA_character_
-    df$taxon_family <- NA_character_
-    df$taxon_match_status <- "no_taxon_column"
-  }
-
-  lat_col <- find_first_col(df, c("decimalLatitude", "latitude", "lat"))
-  lon_col <- find_first_col(df, c("decimalLongitude", "longitude", "long", "lon"))
-
-  lat_vals <- if (!is.null(lat_col)) suppressWarnings(as.numeric(df[[lat_col]])) else rep(NA_real_, nrow(df))
-  lon_vals <- if (!is.null(lon_col)) suppressWarnings(as.numeric(df[[lon_col]])) else rep(NA_real_, nrow(df))
-
-  coord_valid <- !is.na(lat_vals) & !is.na(lon_vals) & lat_vals >= -90 & lat_vals <= 90 & lon_vals >= -180 & lon_vals <= 180
-  coord_issue <- ifelse(is.na(lat_vals) | is.na(lon_vals), "missing_coordinates", ifelse(coord_valid, NA_character_, "out_of_bounds"))
-
-  df$decimalLatitude <- lat_vals
-  df$decimalLongitude <- lon_vals
-  df$coordinate_valid_basic <- coord_valid
-  df$coordinate_issue <- coord_issue
-
-  df
-}
-
-build_staging_table <- function(df) {
-  if (!is.data.frame(df) || nrow(df) == 0) {
-    return(data.frame())
-  }
-
-  event_col <- find_first_col(df, c("eventDate", "date_collected", "date", "collection_date"))
-  basis_col <- find_first_col(df, c("basisOfRecord", "observation_type", "record_type"))
-  occ_id_col <- find_first_col(df, c("occurrenceID", "occurrence_id", "record_id", "id"))
-  dataset_col <- find_first_col(df, c("dataset", "project", "survey"))
-  trait_name_col <- find_first_col(df, c("measurementType", "trait_name", "trait", "variable"))
-  trait_val_col <- find_first_col(df, c("measurementValue", "trait_value", "value", "dbh", "diameter"))
-  trait_unit_col <- find_first_col(df, c("measurementUnit", "unit", "units", "trait_unit"))
-  plot_col <- find_first_col(df, c("plotName", "plot_name", "plot", "site_name"))
-
-  staging <- data.frame(
-    staging_record_id = seq_len(nrow(df)),
-    source_file = if ("source_file" %in% names(df)) as.character(df$source_file) else NA_character_,
-    source_row_id = if ("source_row_id" %in% names(df)) suppressWarnings(as.integer(df$source_row_id)) else NA_integer_,
-    plotName = if (!is.null(plot_col)) as.character(df[[plot_col]]) else NA_character_,
-    scientificName_submitted = if ("taxon_submitted" %in% names(df)) as.character(df$taxon_submitted) else NA_character_,
-    scientificName_matched = if ("taxon_matched" %in% names(df)) as.character(df$taxon_matched) else NA_character_,
-    scientificName_match_status = if ("taxon_match_status" %in% names(df)) as.character(df$taxon_match_status) else NA_character_,
-    scientificFamily_matched = if ("taxon_family" %in% names(df)) as.character(df$taxon_family) else NA_character_,
-    decimalLatitude = if ("decimalLatitude" %in% names(df)) suppressWarnings(as.numeric(df$decimalLatitude)) else NA_real_,
-    decimalLongitude = if ("decimalLongitude" %in% names(df)) suppressWarnings(as.numeric(df$decimalLongitude)) else NA_real_,
-    coordinate_valid_basic = if ("coordinate_valid_basic" %in% names(df)) as.logical(df$coordinate_valid_basic) else NA,
-    coordinate_issue = if ("coordinate_issue" %in% names(df)) as.character(df$coordinate_issue) else NA_character_,
-    eventDate = if (!is.null(event_col)) as.character(df[[event_col]]) else NA_character_,
-    basisOfRecord = if (!is.null(basis_col)) as.character(df[[basis_col]]) else NA_character_,
-    occurrenceID = if (!is.null(occ_id_col)) as.character(df[[occ_id_col]]) else NA_character_,
-    dataset = if (!is.null(dataset_col)) as.character(df[[dataset_col]]) else NA_character_,
-    measurementType = if (!is.null(trait_name_col)) as.character(df[[trait_name_col]]) else NA_character_,
-    measurementValue = if (!is.null(trait_val_col)) as.character(df[[trait_val_col]]) else NA_character_,
-    measurementUnit = if (!is.null(trait_unit_col)) as.character(df[[trait_unit_col]]) else NA_character_,
-    ingestion_timestamp_utc = format(Sys.time(), tz = "UTC", usetz = TRUE),
-    stringsAsFactors = FALSE
-  )
-
-  staging
-}
-
-run_ingest_workflow <- function(file_info) {
-  if (is.null(file_info) || nrow(file_info) == 0) {
-    return(NULL)
-  }
-
-  bien_fields <- get_bien_reference_fields(timeout_sec = 12)
-
-  tables <- lapply(seq_len(nrow(file_info)), function(i) {
-    this_path <- file_info$datapath[[i]]
-    this_name <- file_info$name[[i]]
-    df <- tryCatch(
-      read.csv(this_path, stringsAsFactors = FALSE, strip.white = TRUE, na.strings = c("", "NA", "NULL")),
-      error = function(e) data.frame()
-    )
-    df <- drop_empty_rows(df)
-    list(name = this_name, data = df)
-  })
-
-  valid_tables <- tables[vapply(tables, function(x) is.data.frame(x$data) && nrow(x$data) > 0, logical(1))]
-  if (length(valid_tables) == 0) {
-    return(NULL)
-  }
-
-  map_list <- lapply(valid_tables, function(tbl) {
-    build_column_mapping(tbl$data, tbl$name, bien_reference_fields = bien_fields)
-  })
-  map_df <- dplyr::bind_rows(map_list)
-
-  std_tables <- lapply(seq_along(valid_tables), function(i) {
-    standardize_table_columns(valid_tables[[i]]$data, map_list[[i]], valid_tables[[i]]$name)
-  })
-  names(std_tables) <- vapply(valid_tables, function(x) x$name, character(1))
-
-  merge_info <- suggest_merge_key(map_list, std_tables)
-  merged <- merge_standardized_tables(std_tables, merge_info$key)
-  merged_aug <- augment_tnrs_and_coordinates(merged, timeout_sec = 8, taxon_cap = 40)
-  staging <- build_staging_table(merged_aug)
-
-  file_summary <- data.frame(
-    source_file = vapply(valid_tables, function(x) x$name, character(1)),
-    n_rows = vapply(valid_tables, function(x) nrow(x$data), numeric(1)),
-    n_columns = vapply(valid_tables, function(x) ncol(x$data), numeric(1)),
-    dwc_mapped_columns = vapply(map_list, function(x) sum(!is.na(x$mapped_dwc_term)), numeric(1)),
-    bien_mapped_columns = vapply(map_list, function(x) sum(!is.na(x$mapped_bien_field)), numeric(1)),
-    bien_exact_name_matches = vapply(map_list, function(x) sum(isTRUE(x$bien_exact_name_match)), numeric(1)),
-    stringsAsFactors = FALSE
-  )
-
-  bien_schema_check <- tryCatch(
-    BIEN_metadata_match_data(
-      old = as.data.frame(merged_aug[0, , drop = FALSE]),
-      new = as.data.frame(stats::setNames(as.list(rep(NA_character_, length(bien_fields))), bien_fields)),
-      return = "logical"
-    ),
-    error = function(e) NA
-  )
-
-  list(
-    file_summary = file_summary,
-    column_map = map_df,
-    merge_candidates = merge_info$candidates,
-    merge_key = merge_info$key,
-    merged = merged_aug,
-    staging = staging,
-    bien_schema_check = bien_schema_check
-  )
-}
+# [ingest helpers removed: get_dwc_aliases, get_bien_reference_fields, lookup_alias_term,
+#  build_column_mapping, suggest_merge_key, standardize_table_columns, merge_standardized_tables,
+#  augment_tnrs_and_coordinates, build_staging_table]
 
 # Main Shiny user interface: query controls plus linked tabs for occurrence, trait, and range evidence.
 ui <- fluidPage(
@@ -2676,42 +2360,6 @@ ui <- fluidPage(
           verbatimTextOutput("trait_query_code")
         ),
         tabPanel(
-          "Ingest to BIEN",
-          br(),
-          tags$p(
-            style = "color:#555;max-width:980px;",
-            "Upload multiple CSV files (for example, plot metadata + field survey records). The app maps columns to Darwin Core and BIEN-like fields, suggests a merge key, builds a flat merged table, runs TNRS-like taxon normalization and coordinate QA, then creates a staging-table preview for BIEN loading."
-          ),
-          fileInput(
-            "ingest_files",
-            "Select one or more CSV files",
-            multiple = TRUE,
-            accept = c("text/csv", ".csv")
-          ),
-          actionButton("analyze_ingest_files", "Analyze, Merge, and Build Staging Table", class = "btn-primary"),
-          br(), br(),
-          uiOutput("ingest_merge_suggestion"),
-          br(),
-          tags$h4("Uploaded File Summary"),
-          DTOutput("ingest_file_summary"),
-          br(),
-          tags$h4("Column Mapping (Darwin Core + BIEN)"),
-          DTOutput("ingest_column_map"),
-          br(),
-          tags$h4("Merge Candidate Keys"),
-          DTOutput("ingest_merge_candidates"),
-          br(),
-          tags$h4("Merged Flat Table Preview"),
-          DTOutput("ingest_merged_preview"),
-          br(),
-          tags$h4("BIEN Staging Table Preview"),
-          DTOutput("ingest_staging_preview"),
-          br(),
-          downloadButton("download_ingest_merged", "Download merged flat CSV", class = "btn btn-default btn-sm"),
-          tags$span("\u00A0"),
-          downloadButton("download_ingest_staging", "Download staging CSV", class = "btn btn-default btn-sm")
-        ),
-        tabPanel(
           "Species External Links",
           br(),
           tags$p(
@@ -2735,78 +2383,9 @@ server <- function(input, output, session) {
   summary_cache_nonce <- reactiveVal(0L)
   trait_cache <- new.env(parent = emptyenv())
   range_cache <- new.env(parent = emptyenv())
-  taxonomy_presence_cache <- new.env(parent = emptyenv())
   manual_query_nonce <- reactiveVal(0L)
   last_lucky_species <- reactiveVal(NULL)
-  ingest_bundle <- reactiveVal(NULL)
   species_select_choices <- reactiveVal(STARTUP_SPECIES)
-
-  build_preloaded_startup_result <- function() {
-    data_dir <- file.path(getwd(), "sample_data")
-    occ_file <- file.path(data_dir, paste0(STARTUP_SPECIES_SLUG, "_occurrences.csv"))
-    trait_file <- file.path(data_dir, paste0(STARTUP_SPECIES_SLUG, "_traits.csv"))
-    range_file <- file.path(data_dir, paste0(STARTUP_SPECIES_SLUG, "_ranges.csv"))
-
-    if (!file.exists(occ_file) || !file.exists(trait_file)) {
-      return(NULL)
-    }
-
-    occ <- tryCatch(read.csv(occ_file, stringsAsFactors = FALSE), error = function(e) data.frame())
-    traits <- tryCatch(read.csv(trait_file, stringsAsFactors = FALSE), error = function(e) data.frame())
-    ranges <- tryCatch(read.csv(range_file, stringsAsFactors = FALSE), error = function(e) data.frame())
-    startup_range_sf <- read_downloaded_range_sf(getwd(), STARTUP_SPECIES)
-
-    if (!is.data.frame(occ) || nrow(occ) == 0) {
-      return(NULL)
-    }
-
-    occ <- categorize_observation_records(occ)
-    occ_prepared <- prepare_occurrences(occ, map_point_cap = 800, sample_method = "datasource")
-    family_name <- extract_primary_value(occ, c("scrubbed_family", "family", "verbatim_family"))
-    reconciliation_tbl <- build_reconciliation_table(STARTUP_SPECIES, occ, NULL, "startup_preloaded_local_dataset", NULL)
-
-    list(
-      species = STARTUP_SPECIES,
-      family_name = family_name,
-      occurrences = occ,
-      occurrences_prepared = occ_prepared,
-      occurrences_returned = nrow(occ),
-      occ_total_available = NA_real_,
-      occ_total_note = "Startup data loaded from local sample_data files. Click 'Query BIEN' for live BIEN retrieval.",
-      occ_source_mix = NULL,
-      occurrence_sample_mode = "datasource",
-      traits = traits,
-      ranges = ranges,
-      range_sf = startup_range_sf,
-      range_dir = getwd(),
-      include_range_query = TRUE,
-      timeout_sec = 90,
-      occ_limit = 1000,
-      map_point_cap = 800,
-      trait_limit = 1000,
-      occ_fetch_limit = nrow(occ),
-      fast_large_species_mode = TRUE,
-      trait_fetch_limit = nrow(traits),
-      occ_strategy = "startup_preloaded_local_dataset",
-      use_default_filter_profile = TRUE,
-      use_cultivated_filter = TRUE,
-      use_introduced_filter = TRUE,
-      include_cultivated = FALSE,
-      natives_only = TRUE,
-      only_plot_observations = FALSE,
-      only_geovalid = TRUE,
-      exclude_human_observation_records = FALSE,
-      query_cache_key = STARTUP_CACHE_KEY,
-      is_startup_preloaded = TRUE,
-      query_elapsed_sec = 0,
-      cache_hit = TRUE,
-      query_errors = "startup_preloaded_local_dataset",
-      reconciliation = reconciliation_tbl,
-      name_suggestion = NULL
-    )
-  }
-
-  startup_preloaded_result <- build_preloaded_startup_result()
 
   update_species_select_input <- function(selected_species, choices = NULL) {
     selected_species <- normalize_species_name(selected_species)
@@ -2832,22 +2411,6 @@ server <- function(input, output, session) {
         placeholder = "Start typing accepted BIEN species names..."
       )
     )
-  }
-
-  taxonomy_species_exists <- function(species_name, timeout_sec = 20) {
-    species_key <- tolower(normalize_species_name(species_name))
-    if (!nzchar(species_key)) {
-      return(FALSE)
-    }
-
-    if (exists(species_key, envir = taxonomy_presence_cache, inherits = FALSE)) {
-      return(get(species_key, envir = taxonomy_presence_cache, inherits = FALSE))
-    }
-
-    tax_res <- safe_bien_call(BIEN_taxonomy_species(species_name), timeout_sec = timeout_sec)
-    found <- is.data.frame(tax_res) && nrow(tax_res) > 0
-    assign(species_key, found, envir = taxonomy_presence_cache)
-    found
   }
 
   observeEvent(TRUE, {
@@ -3216,7 +2779,7 @@ server <- function(input, output, session) {
         "Not available"
       } else {
         vals <- as.character(plot_df[[date_col]])
-        years <- suppressWarnings(as.integer(sub("^.*?(\\\\d{4}).*$", "\\\\1", vals)))
+        years <- suppressWarnings(as.integer(sub("^.*?(\\d{4}).*$", "\\1", vals)))
         years <- years[!is.na(years) & years >= 1500 & years <= 2100]
         if (length(years) == 0) {
           "Not available"
@@ -3287,8 +2850,13 @@ server <- function(input, output, session) {
       updateCheckboxInput(session, "only_plot_observations", value = FALSE)
       last_lucky_species(lucky$species)
       update_species_select_input(lucky$species)
+      lucky_pick_note <- if (is.character(lucky$precheck) && grepl("range_verified", lucky$precheck)) {
+        "(range-map verified)"
+      } else {
+        "(fast starter pick; range verification skipped)"
+      }
       showNotification(
-        paste0("Random species selected: ", lucky$species, " (range-map verified). Plot-only filtering was turned off for this run."),
+        paste0("Random species selected: ", lucky$species, " ", lucky_pick_note, ". Plot-only filtering was turned off for this run."),
         type = "message",
         duration = 6
       )
@@ -3506,7 +3074,7 @@ server <- function(input, output, session) {
       )
     }
 
-    if (mappable_n == 0 && !is_bien_connection_error(res$query_errors) && isTRUE(taxonomy_species_exists(res$species, timeout_sec = 20))) {
+    if (mappable_n == 0 && !is_bien_connection_error(res$query_errors)) {
       likely_filters <- character()
       if (isTRUE(res$use_default_filter_profile) || (isTRUE(res$use_introduced_filter) && isTRUE(res$natives_only))) {
         likely_filters <- c(likely_filters, "native-only")
@@ -3531,7 +3099,7 @@ server <- function(input, output, session) {
       }
       showNotification(
         paste(
-          "Name found in BIEN taxonomy, but no mappable occurrence points under current filters.",
+          "No mappable occurrence points were found under current filters.",
           filter_text,
           map_hint
         ),
@@ -3724,116 +3292,6 @@ server <- function(input, output, session) {
 
     build_plot_repro_script(res)
   })
-
-  observeEvent(input$analyze_ingest_files, {
-    req(input$ingest_files)
-
-    withProgress(message = "Running ingest pipeline", detail = "Reading files and mapping columns", value = 0, {
-      incProgress(0.25, detail = "Mapping Darwin Core and BIEN fields")
-      ingest_res <- run_ingest_workflow(input$ingest_files)
-
-      if (is.null(ingest_res)) {
-        showNotification("No non-empty CSV tables were detected in the uploaded files.", type = "warning", duration = 8)
-        ingest_bundle(NULL)
-        return(NULL)
-      }
-
-      incProgress(0.65, detail = "Building merged flat table and TNRS/coordinate augmentation")
-      ingest_bundle(ingest_res)
-      incProgress(1, detail = "Ingest analysis complete")
-    })
-  }, ignoreInit = TRUE)
-
-  output$ingest_merge_suggestion <- renderUI({
-    bundle <- ingest_bundle()
-    if (is.null(bundle)) {
-      return(tags$div(style = "color:#666;", "Upload CSV files and click Analyze to generate mapping and merge suggestions."))
-    }
-
-    key_txt <- if (!is.null(bundle$merge_key) && nzchar(bundle$merge_key)) bundle$merge_key else "No high-confidence key found"
-    bien_check_txt <- if (isTRUE(bundle$bien_schema_check)) {
-      "Merged schema is identical to BIEN reference fields (strict check)."
-    } else if (isFALSE(bundle$bien_schema_check)) {
-      "Merged schema differs from strict BIEN reference fields; staging preview includes normalized BIEN-ready columns."
-    } else {
-      "BIEN strict schema comparison not available for this run."
-    }
-
-    tags$div(
-      style = "background:#eef6ff;border:1px solid #b7d2e8;color:#1e4f78;padding:10px 12px;border-radius:6px;",
-      tags$strong("Suggested merge key: "), key_txt,
-      tags$br(),
-      tags$strong("RBIEN schema check: "), bien_check_txt
-    )
-  })
-
-  output$ingest_file_summary <- renderDT({
-    bundle <- ingest_bundle()
-    if (is.null(bundle) || !is.data.frame(bundle$file_summary)) {
-      return(datatable(data.frame(message = "No ingest summary available."), options = list(dom = "t"), rownames = FALSE))
-    }
-    datatable(bundle$file_summary, options = list(pageLength = 10, scrollX = TRUE), rownames = FALSE)
-  })
-
-  output$ingest_column_map <- renderDT({
-    bundle <- ingest_bundle()
-    if (is.null(bundle) || !is.data.frame(bundle$column_map)) {
-      return(datatable(data.frame(message = "No column mapping available."), options = list(dom = "t"), rownames = FALSE))
-    }
-    datatable(bundle$column_map, filter = "top", options = list(pageLength = 15, scrollX = TRUE), rownames = FALSE)
-  })
-
-  output$ingest_merge_candidates <- renderDT({
-    bundle <- ingest_bundle()
-    if (is.null(bundle) || !is.data.frame(bundle$merge_candidates) || nrow(bundle$merge_candidates) == 0) {
-      return(datatable(data.frame(message = "No merge-key candidates identified."), options = list(dom = "t"), rownames = FALSE))
-    }
-    datatable(bundle$merge_candidates, options = list(pageLength = 10, scrollX = TRUE), rownames = FALSE)
-  })
-
-  output$ingest_merged_preview <- renderDT({
-    bundle <- ingest_bundle()
-    if (is.null(bundle) || !is.data.frame(bundle$merged)) {
-      return(datatable(data.frame(message = "No merged table available."), options = list(dom = "t"), rownames = FALSE))
-    }
-    datatable(utils::head(bundle$merged, 200), options = list(pageLength = 10, scrollX = TRUE), rownames = FALSE)
-  })
-
-  output$ingest_staging_preview <- renderDT({
-    bundle <- ingest_bundle()
-    if (is.null(bundle) || !is.data.frame(bundle$staging)) {
-      return(datatable(data.frame(message = "No staging table available."), options = list(dom = "t"), rownames = FALSE))
-    }
-    datatable(utils::head(bundle$staging, 200), options = list(pageLength = 10, scrollX = TRUE), rownames = FALSE)
-  })
-
-  output$download_ingest_merged <- downloadHandler(
-    filename = function() {
-      paste0("bien_ingest_merged_", format(Sys.time(), "%Y%m%d_%H%M%S"), ".csv")
-    },
-    content = function(file) {
-      bundle <- ingest_bundle()
-      if (is.null(bundle) || !is.data.frame(bundle$merged)) {
-        write.csv(data.frame(message = "No merged table available."), file, row.names = FALSE)
-        return(NULL)
-      }
-      write.csv(bundle$merged, file, row.names = FALSE)
-    }
-  )
-
-  output$download_ingest_staging <- downloadHandler(
-    filename = function() {
-      paste0("bien_ingest_staging_", format(Sys.time(), "%Y%m%d_%H%M%S"), ".csv")
-    },
-    content = function(file) {
-      bundle <- ingest_bundle()
-      if (is.null(bundle) || !is.data.frame(bundle$staging)) {
-        write.csv(data.frame(message = "No staging table available."), file, row.names = FALSE)
-        return(NULL)
-      }
-      write.csv(bundle$staging, file, row.names = FALSE)
-    }
-  )
 
   output$species_external_links <- renderUI({
     res <- bien_results()
@@ -4321,8 +3779,8 @@ server <- function(input, output, session) {
     mapped_pct_guidance <- "If this mapped proportion seems low, click Query BIEN again to refresh a randomized sample, or increase 'Max mapped occurrence points' (and optionally 'Occurrence records to keep in app sample') in the sidebar."
 
     HTML(paste0(
-      "<strong>Species:</strong> ", res$species,
-      "<br><strong>Family:</strong> ", family_name,
+      "<strong>Species:</strong> ", htmltools::htmlEscape(res$species),
+      "<br><strong>Family:</strong> ", htmltools::htmlEscape(family_name),
       "<br><strong>Total BIEN occurrence records matching current strategy (count only; not downloaded):</strong> ", occ_total_txt,
       "<br><strong>Total ALL BIEN observations for this species (count only; unfiltered):</strong> ",
       if (!is.null(occ_total_all_available) && !is.na(occ_total_all_available)) {
@@ -4379,7 +3837,7 @@ server <- function(input, output, session) {
       } else {
         ""
       },
-      "<br><strong>Occurrence strategy:</strong> ", res$occ_strategy,
+      "<br><strong>Occurrence strategy:</strong> ", htmltools::htmlEscape(res$occ_strategy),
       if (occ_n > 0 && mappable_n == 0) {
         "<br><strong>Map note:</strong> This is a BIEN data-response limitation for the current species/query, not necessarily an app error."
       } else {

@@ -4,6 +4,11 @@ Tracks prompts that created or changed work under this project folder.
 
 ## Entries
 
+26. Date: 2026-05-08
+Prompt: For https://benquist.shinyapps.io/bien-species-shinyapp/ The front page when one immediately loads the app, the observation data points for Pinus ponderosa take a long time to load. It would be great if the observation points loaded immediately.
+Source session: current workspace session
+Outcome: Moved `build_preloaded_startup_result()` and its call from inside `server <- function(...)` to global scope (before the server function). Previously this ran per-session, re-reading CSVs, running `categorize_observation_records`, `prepare_occurrences`, and `st_read()` for every new user session. Now it runs once at app launch and the result is shared across all sessions via R's lexical scoping, eliminating the per-session startup delay and making observation points appear immediately on first load.
+
 1. Date: 2026-03-30
 Prompt: Lets create a new project in a new folder called BIEN Shiny App. Use the BIEN R Package for biendata.org. I would like to make a shiny app where we a user can query for a given species and the shiny app then plots the observation points on a map. THe map can be scaled at different geographic scales. Suggest some important ways that one can explore the species level data for each species. You can query species for traits, and geographic ranges too. The shiny app will allow the user to explore species-level observation data
 Source session: current workspace session
@@ -186,3 +191,18 @@ Outcome: Root cause was selectize create=FALSE preventing free-form text submiss
 Prompt: Standardize BIEN-SpeciesShinyApp so its tabs, header, BIEN logo placement, fonts, buttons, and color palette match BIEN-TraitsShinyApp more closely, with the BIEN logo always first on the left.
 Source session: current workspace session
 Outcome: Reworked the Species app header to use the Traits-style branded page header with the BIEN logo first on the left, aligned typography and color tokens to the Traits portal, and ported the Traits tab/button visual language while preserving the Species app sidebar, tab structure, and server behavior. Deployed to shinyapps.io.
+
+32. Date: 2026-04-24
+Prompt: Implement targeted app.R changes for random-species responsiveness, remove post-query blocking taxonomy lookup, and remove the Ingest to BIEN tab plus active ingest server handlers.
+Source session: current workspace session
+Outcome: Added a guaranteed starter-pool fast fallback (`starter_pool_fast_fallback`) in `find_lucky_species_with_mappable_points()` after verified attempts fail, removed `taxonomy_species_exists()` from the zero-mappable notification gate, deleted the `Ingest to BIEN` tab UI block, removed `ingest_bundle <- reactiveVal(NULL)`, removed the ingest analyze observeEvent and all ingest render/download outputs, and verified `app.R` parses successfully.
+
+33. Date: 2026-04-24
+Prompt: Edit BIEN-SpeciesShinyApp app.R with two targeted changes: make Random Species immediate and remove leftover ingest-associated function.
+Source session: current workspace session
+Outcome: Replaced the starter-pool precheck loop in `find_lucky_species_with_mappable_points()` with immediate random return (`precheck = "starter_pool_fast_pick"`, `attempts = 1`) and removed the full `run_ingest_workflow <- function(file_info) { ... }` block; parse check confirmed `SYNTAX OK`.
+
+34. Date: 2026-04-24
+Prompt: Edit BIEN-SpeciesShinyApp/app.R to address two review warnings and one cleanup: conditional lucky notification by precheck state, neutral zero-mappable wording, and removal of dead taxonomy cache/helper.
+Source session: current workspace session
+Outcome: Updated Lucky notification text to reflect `lucky$precheck` (`range-map verified` vs `fast starter pick; range verification skipped`), replaced zero-mappable opener with neutral filter-based wording, removed `taxonomy_presence_cache` and `taxonomy_species_exists`, and verified `app.R` parse passes.
