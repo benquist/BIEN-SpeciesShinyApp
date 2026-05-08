@@ -1382,10 +1382,10 @@ compact_label <- function(text, tip = NULL) {
 choose_startup_species_from_local_samples <- function(data_dir = file.path(getwd(), "sample_data")) {
   occ_files <- list.files(data_dir, pattern = "_occurrences\\.csv$", full.names = TRUE)
   if (length(occ_files) == 0) {
-    return("Pinus ponderosa")
+    return("Chimarrhis hookeri")
   }
 
-  best_species <- "Pinus ponderosa"
+  best_species <- "Chimarrhis hookeri"
   best_score <- -Inf
 
   for (occ_file in occ_files) {
@@ -1439,7 +1439,7 @@ choose_startup_species_from_local_samples <- function(data_dir = file.path(getwd
   normalize_species_name(best_species)
 }
 
-STARTUP_SPECIES <- "Pinus ponderosa"
+STARTUP_SPECIES <- "Chimarrhis hookeri"
 STARTUP_SPECIES_SLUG <- gsub("\\s+", "_", tolower(STARTUP_SPECIES))
 STARTUP_CACHE_KEY <- paste0("startup_preloaded_", STARTUP_SPECIES_SLUG)
 
@@ -1962,7 +1962,29 @@ ui <- fluidPage(
       actionButton("run_query", "Query BIEN", class = "btn btn-primary btn-lg bien-action-btn bien-query-btn"),
       tags$div(
         style = "margin:10px 0 12px 0;",
-        actionButton("open_tab_help", "Help", class = "btn btn-info btn-lg bien-action-btn bien-help-btn")
+        actionButton("open_tab_help", "Help", class = "btn btn-info btn-lg bien-action-btn bien-help-btn"),
+        tags$span("\u00A0"),
+        tags$button(
+          id = "copy_link_btn",
+          class = "btn btn-default btn-sm",
+          style = "vertical-align:middle;",
+          title = "Copy a shareable link for the current species and tab to the clipboard",
+          onclick = paste0(
+            "var url = window.location.href;",
+            "if (navigator.clipboard && navigator.clipboard.writeText) {",
+            "  navigator.clipboard.writeText(url).then(function() {",
+            "    var b = document.getElementById('copy_link_btn');",
+            "    var orig = b.innerHTML;",
+            "    b.innerHTML = 'Copied!';",
+            "    b.style.color = '#2E7D32';",
+            "    setTimeout(function(){ b.innerHTML = orig; b.style.color = ''; }, 1800);",
+            "  });",
+            "} else {",
+            "  window.prompt('Copy this link:', url);",
+            "}"
+          ),
+          "\U0001F517 Copy link"
+        )
       ),
       uiOutput("retry_bien_ui"),
       tags$script(HTML("$(document).on('keydown', '#species-selectized', function(e) { if (e.key === 'Enter') { $('#run_query').click(); return false; } });")),
@@ -2394,6 +2416,14 @@ ui <- fluidPage(
           "Download",
           br(),
           tags$style(HTML("#bien_query_code, #plot_query_code, #trait_query_code { max-height: 180px; overflow-y: auto; overflow-x: auto; }")),
+          tags$div(
+            style = "background:#e8f5e9;border:1px solid #a5d6a7;border-radius:6px;padding:10px 14px;margin-bottom:16px;",
+            tags$h4(style = "margin-top:0;color:#1b5e20;", "\U0001F4E6 Download everything as a ZIP"),
+            tags$p(style = "color:#2e7d32;margin:0 0 8px 0;font-size:0.93em;",
+              "One bundle: occurrence CSV, plot community CSV, trait CSV, and all three reproducible R scripts."
+            ),
+            downloadButton("download_all_zip", "Download all datasets + code (.zip)", class = "btn btn-success btn-sm")
+          ),
           tags$h4("Occurrence Downloads"),
           tags$p(
             style = "color:#555;max-width:900px;",
@@ -3441,6 +3471,85 @@ server <- function(input, output, session) {
     }
   )
 
+  output$download_trait_repro_script <- downloadHandler(
+    filename = function() {
+      res <- bien_results()
+      species_safe <- gsub("[^A-Za-z0-9_]+", "_", if (!is.null(res$species)) res$species else "species")
+      paste0(species_safe, "_reproduce_trait_dataset.R")
+    },
+    content = function(file) {
+      res <- bien_results()
+      writeLines(build_trait_repro_script(res), file, useBytes = TRUE)
+    }
+  )
+
+  output$download_all_zip <- downloadHandler(
+    filename = function() {
+      res <- bien_results()
+      species_safe <- gsub("[^A-Za-z0-9_]+", "_", if (!is.null(res$species)) res$species else "species")
+      paste0(species_safe, "_BIEN_data_bundle_", format(Sys.Date(), "%Y%m%d"), ".zip")
+    },
+    content = function(file) {
+      res         <- bien_results()
+      trait_bundle <- trait_results()
+      sp_safe     <- gsub("[^A-Za-z0-9_]+", "_", if (!is.null(res$species)) res$species else "species")
+
+      tmp_dir <- file.path(tempdir(), paste0("bien_bundle_", sp_safe, "_", floor(as.numeric(Sys.time()))))
+      dir.create(tmp_dir, recursive = TRUE, showWarnings = FALSE)
+
+      provenance_header <- c(
+        paste0("# BIEN Species App - data bundle"),
+        paste0("# Species: ", if (!is.null(res$species)) res$species else "unknown"),
+        paste0("# Download date (UTC): ", format(Sys.time(), "%Y-%m-%d %H:%M:%S", tz = "UTC")),
+        paste0("# Filter profile: ", if (isTRUE(res$use_default_filter_profile)) "conservative default" else "custom"),
+        paste0("# Natives only: ", if (!is.null(res$natives_only)) res$natives_only else "unknown"),
+        paste0("# Geo-validated only: ", if (!is.null(res$only_geovalid)) res$only_geovalid else "unknown"),
+        paste0("# BIEN R package: ", as.character(packageVersion("BIEN"))),
+        paste0("# App source: https://github.com/benquist/BIEN-SpeciesShinyApp"),
+        ""
+      )
+
+      write_csv_with_provenance <- function(df_or_null, fpath, fallback_msg) {
+        if (is.data.frame(df_or_null) && nrow(df_or_null) > 0) {
+          writeLines(provenance_header, con = fpath)
+          write.table(df_or_null, fpath, row.names = FALSE, col.names = TRUE,
+                      sep = ",", append = TRUE, na = "")
+        } else {
+          write.csv(data.frame(message = fallback_msg), fpath, row.names = FALSE)
+        }
+      }
+
+      # Occurrence CSV
+      write_csv_with_provenance(res$occurrences,
+        file.path(tmp_dir, paste0(sp_safe, "_occurrences.csv")),
+        "No occurrence data available.")
+
+      # Trait CSV
+      write_csv_with_provenance(trait_bundle$data,
+        file.path(tmp_dir, paste0(sp_safe, "_traits.csv")),
+        "No trait data available.")
+
+      # Plot community CSV
+      plot_bundle <- tryCatch(get_plot_community_bundle(res), error = function(e) list(raw = NULL))
+      write_csv_with_provenance(plot_bundle$raw,
+        file.path(tmp_dir, paste0(sp_safe, "_plot_community.csv")),
+        "No plot community data available.")
+
+      # R repro scripts
+      writeLines(build_occurrence_repro_script(res),
+        file.path(tmp_dir, paste0(sp_safe, "_reproduce_occurrences.R")), useBytes = TRUE)
+      writeLines(build_trait_repro_script(res),
+        file.path(tmp_dir, paste0(sp_safe, "_reproduce_traits.R")), useBytes = TRUE)
+      writeLines(build_plot_repro_script(res),
+        file.path(tmp_dir, paste0(sp_safe, "_reproduce_plot_community.R")), useBytes = TRUE)
+
+      old_wd <- setwd(tmp_dir)
+      on.exit({ setwd(old_wd); unlink(tmp_dir, recursive = TRUE) }, add = TRUE)
+      zip(file, files = list.files(tmp_dir, full.names = FALSE))
+    }
+  )
+
+
   output$bien_query_code <- renderText({
     res <- bien_results()
     if (is.null(res) || !is.list(res)) {
@@ -3953,7 +4062,34 @@ server <- function(input, output, session) {
     }
     mapped_pct_guidance <- "If this mapped proportion seems low, click Query BIEN again to refresh a randomized sample, or increase 'Max mapped occurrence points' (and optionally 'Occurrence records to keep in app sample') in the sidebar."
 
+    cache_age_note <- if (isTRUE(res$cache_hit)) {
+      # Estimate age from shared cache if present; otherwise just say cached.
+      entry <- tryCatch(
+        get(res$query_cache_key, envir = shared_bien_cache, inherits = FALSE),
+        error = function(e) NULL
+      )
+      if (!is.null(entry) && !is.null(entry$cached_at)) {
+        age_min <- round(as.numeric(difftime(Sys.time(), entry$cached_at, units = "mins")), 1)
+        paste0("served from cache \u2014 ", age_min, " min old")
+      } else {
+        "served from session cache"
+      }
+    } else {
+      NULL
+    }
+
     HTML(paste0(
+      if (!is.null(cache_age_note)) {
+        paste0(
+          "<div style='display:inline-block;background:#e8f5e9;color:#2E7D32;",
+          "border:1px solid #a5d6a7;border-radius:4px;padding:2px 10px;",
+          "font-size:0.85em;font-weight:600;margin-bottom:8px;'>",
+          "\u26A1 Cache hit \u2014 ", htmltools::htmlEscape(cache_age_note),
+          "</div><br>"
+        )
+      } else {
+        ""
+      },
       "<strong>Species:</strong> ", htmltools::htmlEscape(res$species),
       "<br><strong>Family:</strong> ", htmltools::htmlEscape(family_name),
       "<br><strong>Total BIEN occurrence records matching current strategy (count only; not downloaded):</strong> ", htmltools::htmlEscape(occ_total_txt),
