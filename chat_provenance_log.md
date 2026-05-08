@@ -2,6 +2,27 @@
 
 Tracks prompts that created or changed work under this project folder.
 
+## 2026-05-09 — Multi-agent UX/design redesign
+
+**Prompt:** "@M orchestrate design proposal from @scandinavian-design, @design-atelier, @biodiversity-informatics-checker, @ecology-user for the BIEN Species Shiny app"
+
+**Agents invoked:** ecology-user (use case analysis), biodiversity-informatics-checker (data quality audit), design-atelier + scandinavian-design (Nordic UI/UX spec)
+
+**Changes implemented in `app.R`:**
+- CSS flexbox `order` properties on `.nav-tabs > li:nth-child(N)` to visually reorder tabs: Occurrence 1st, Observations 2nd, Traits 3rd, Range 4th, Community 5th, Temporal 6th, Download 7th, External Links 8th, About & Help last — without changing server-side tab IDs.
+- Renamed "Overview & About" tab to "About & Help".
+- `uiOutput("taxon_match_banner_ui")` added above tabsetPanel — amber banner when BIEN-resolved name ≠ user input; shown on all tabs.
+- `uiOutput("recon_callout_ui")` — compact above-map callout showing queried vs. BIEN-matched name and geographic scope.
+- `uiOutput("qa_chips_bar_ui")` — pill-style QA chips bar: native/introduced/unknown record counts with amber warnings at >20% unknown or sampling cap active.
+- `uiOutput("map_caption_ui")` — amber sampling-cap disclosure below occurrence map.
+- Observations tab: added `disclosure-strip` explaining deduplication key (species+lat+lon+observation_type) and heuristic classification.
+- Traits tab: added `disclosure-strip` for parsing exclusions (range notation → NA) and no-unit-harmonization warning.
+- Range tab: upgraded SDM caveat to prominent left-bordered amber callout placed above the map.
+- Community tab: replaced plain `tags$p` with `disclosure-strip` clarifying plot-only scope.
+- New CSS classes: `.taxon-match-banner`, `.qa-chip`, `.qa-warn`, `.map-caption-row`, `.recon-callout`, `.disclosure-strip`, `.null-status-note`.
+- Syntax verified: `parse('app.R')` passes cleanly.
+
+
 ## Entries
 
 29. Date: 2026-05-08
@@ -232,3 +253,13 @@ Outcome: Three features added to app.R (commit f22bcdf, bundle 11967856, image 1
   (1) U4 — Copy link button: Added '🔗 Copy link' button next to Help using vanilla JS navigator.clipboard.writeText(window.location.href). Shows 1.8s 'Copied!' feedback. Falls back to window.prompt for non-HTTPS contexts. Works with U2 URL state so the copied link pre-loads the same species and tab.
   (2) SC-3 — Cache-hit badge: query_summary now displays a green '⚡ Cache hit — X.X min old' badge at the top when results come from either the per-session or shared cross-session cache. Badge shows age in minutes computed from shared_bien_cache$cached_at timestamp. Invisible on fresh queries.
   (3) D1 — ZIP download bundle: New green 'Download all datasets + code (.zip)' button added at the top of the Download tab. Bundles occurrence CSV, trait CSV, plot community CSV + 3 reproducible R scripts into a timestamped .zip file. All CSVs include provenance header block. Uses setwd(tmp_dir) + on.exit cleanup so zip() paths are clean relative paths.
+
+35. Date: 2026-05-09
+Prompt: https://benquist.shinyapps.io/bien-species-shinyapp/ does not work now. I would like the optimizer.agent.md and code-checker.agent.md to review the shiny app code and recommend fixes.
+Source session: current workspace session
+Outcome: Two CRITICALs diagnosed and fixed in app.R (commit 0bc1ec7, bundle 11968347):
+  (1) CRITICAL — Synchronous HTTP fetch inside renderUI blocked the Shiny event loop at session startup. Because bien_results() immediately returns startup_preloaded_result, renderUI fired during the initial render flush and called fetch_species_photo() synchronously — up to 10 seconds blocking on shinyapps.io free tier (5s iNaturalist + 5s Wikipedia), causing startup timeouts and session disconnects. Fix: photo fetch moved into observeEvent(bien_results(), ..., ignoreNULL=TRUE) with an is_startup_preloaded guard that returns immediately at startup. renderUI now reads only from species_photo_rv <- reactiveVal(NULL) — no network I/O in the render path.
+  (2) CRITICAL — return(NULL) inside both tryCatch({...}) blocks exited the enclosing function rather than the tryCatch block, making the Wikipedia fallback unreachable for every failure mode except a thrown R exception. Fix: replaced all return(NULL) guards inside tryCatch with stop("reason") so the error = function(e) NULL handler returns NULL from the block and execution continues to Wikipedia.
+  Additionally: NULL results are no longer cached permanently; only non-NULL photos are assigned to query_cache so transient network failures are retried on the next query.
+  App redeployed and working. Commits 0bc1ec7 + 757da51 pushed to origin/master.
+Sat May  9 00:14:40 BST 2026: Fixed zero-mapped-coord bug for species like Pouteria reticulata where BIEN returns a mix of coord-valid and coord-null rows. The stratified datasource sampler was selecting predominantly null-coord rows. Fix prioritizes coord-valid rows in the app-level downsample (occ_limit) before prepare_occurrences QA. See app.R ~line 3300.
