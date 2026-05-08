@@ -1,6 +1,6 @@
 # Load required packages, installing any missing CRAN dependencies on startup.
 suppressPackageStartupMessages({
-  required_packages <- c("shiny", "BIEN", "dplyr", "stringr", "leaflet", "DT", "sf", "ggplot2")
+  required_packages <- c("shiny", "BIEN", "dplyr", "stringr", "leaflet", "DT", "sf", "ggplot2", "jsonlite", "httr")
   missing_packages <- required_packages[!vapply(required_packages, requireNamespace, logical(1), quietly = TRUE)]
   if (length(missing_packages) > 0) {
     stop(
@@ -20,6 +20,8 @@ suppressPackageStartupMessages({
   library(DT)
   library(sf)
   library(ggplot2)
+  library(jsonlite)
+  library(httr)
 })
 
 # Wrap BIEN calls in a timeout-aware `tryCatch` so slow API responses do not lock up the app.
@@ -50,6 +52,86 @@ safe_bien_retry <- function(call_fn, timeout_sec = 90, attempts = 1, sleep_sec =
     attempt = attempts,
     status = if (inherits(last, "error")) "error" else "empty"
   )
+}
+
+# Fetch a species photo from iNaturalist (primary) or Wikipedia REST API (fallback).
+# Returns list(url, attribution_short, attribution, source_url, inat_name) or NULL.
+# Only cc-by, cc-by-sa, and cc0 iNaturalist photos are used; All Rights Reserved and
+# NC/ND licenses are rejected to prevent copyright violations in a public deployed app.
+# The returned iNaturalist taxon name is validated against the queried name to catch
+# silent taxonomic mismatches (estimated 10-30% in complex families).
+fetch_species_photo <- function(species_name, timeout_sec = 5) {
+  if (!nzchar(trimws(species_name))) return(NULL)
+  allowed_licenses <- c("cc-by", "cc-by-sa", "cc0")
+
+  # --- Primary: iNaturalist taxa API ---
+  inat_result <- tryCatch({
+    resp <- httr::GET(
+      "https://api.inaturalist.org/v1/taxa",
+      query = list(q = species_name, rank = "species", per_page = 1L, locale = "en"),
+      httr::timeout(timeout_sec)
+    )
+    if (httr::http_error(resp)) return(NULL)
+    if (!grepl("application/json", httr::http_type(resp), fixed = TRUE)) return(NULL)
+    parsed <- jsonlite::fromJSON(
+      httr::content(resp, as = "text", encoding = "UTF-8"),
+      simplifyVector = FALSE
+    )
+    results <- parsed$results
+    if (!is.list(results) || length(results) == 0) return(NULL)
+    taxon <- results[[1]]
+    inat_name <- if (!is.null(taxon$name)) taxon$name else ""
+    # Validate taxon name matches queried name (case-insensitive) to prevent mismatch display
+    if (!identical(tolower(trimws(inat_name)), tolower(trimws(species_name)))) return(NULL)
+    photo <- taxon$default_photo
+    if (is.null(photo)) return(NULL)
+    license_code <- if (!is.null(photo$license_code)) tolower(trimws(as.character(photo$license_code))) else ""
+    if (!license_code %in% allowed_licenses) return(NULL)
+    photo_url <- if (!is.null(photo$medium_url)) as.character(photo$medium_url) else ""
+    if (!nzchar(photo_url) || !startsWith(photo_url, "https://")) return(NULL)
+    taxon_id <- if (!is.null(taxon$id)) taxon$id else ""
+    attribution <- if (!is.null(photo$attribution) && nzchar(as.character(photo$attribution))) {
+      as.character(photo$attribution)
+    } else {
+      "iNaturalist"
+    }
+    list(
+      url               = photo_url,
+      attribution_short = paste0("iNaturalist · ", toupper(license_code)),
+      attribution       = attribution,
+      source_url        = paste0("https://www.inaturalist.org/taxa/", taxon_id),
+      inat_name         = inat_name
+    )
+  }, error = function(e) NULL)
+
+  if (!is.null(inat_result)) return(inat_result)
+
+  # --- Fallback: Wikipedia REST summary API (license unverified but labeled) ---
+  tryCatch({
+    slug <- gsub(" ", "_", trimws(species_name))
+    resp <- httr::GET(
+      paste0("https://en.wikipedia.org/api/rest_v1/page/summary/",
+             utils::URLencode(slug, reserved = TRUE)),
+      httr::timeout(timeout_sec)
+    )
+    if (httr::http_error(resp)) return(NULL)
+    if (!grepl("application/json", httr::http_type(resp), fixed = TRUE)) return(NULL)
+    parsed <- jsonlite::fromJSON(
+      httr::content(resp, as = "text", encoding = "UTF-8"),
+      simplifyVector = FALSE
+    )
+    thumb_url <- parsed$thumbnail$source
+    if (is.null(thumb_url) || !nzchar(as.character(thumb_url))) return(NULL)
+    if (!startsWith(as.character(thumb_url), "https://")) return(NULL)
+    list(
+      url               = as.character(thumb_url),
+      attribution_short = "Wikipedia",
+      attribution       = "Wikimedia Commons (license unverified)",
+      source_url        = paste0("https://en.wikipedia.org/wiki/",
+                                 utils::URLencode(slug, reserved = TRUE)),
+      inat_name         = NULL
+    )
+  }, error = function(e) NULL)
 }
 
 # Normalize user-entered species strings so BIEN queries are robust to case.
@@ -1668,6 +1750,10 @@ ui <- fluidPage(
         color: #24445f;
       }
       .page-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 20px;
         padding: 20px;
         background: linear-gradient(180deg, #ffffff 0%, #f2f9ff 100%);
         border-bottom: 1px solid var(--panel-border);
@@ -1679,6 +1765,8 @@ ui <- fluidPage(
         align-items: center;
         gap: 16px;
         flex-wrap: wrap;
+        flex: 1 1 auto;
+        min-width: 0;
       }
       .bien-header-copy {
         min-width: 0;
@@ -1704,6 +1792,64 @@ ui <- fluidPage(
       }
       .bien-logo-fallback {
         display: none;
+      }
+      .bien-species-photo-wrap {
+        flex-shrink: 0;
+        text-align: center;
+      }
+      .bien-species-photo {
+        width: 96px;
+        height: 96px;
+        border-radius: 10px;
+        object-fit: cover;
+        object-position: center 30%;
+        display: block;
+        border: 2px solid var(--panel-border);
+        box-shadow: 0 2px 8px rgba(31, 91, 143, 0.10);
+        transition: opacity 200ms ease;
+      }
+      .bien-photo-attr {
+        font-size: 0.68em;
+        color: #6a8aa6;
+        margin-top: 3px;
+        max-width: 96px;
+        overflow: hidden;
+        white-space: nowrap;
+        text-overflow: ellipsis;
+        text-align: center;
+      }
+      .bien-photo-attr a {
+        color: #4a80aa;
+        text-decoration: none;
+      }
+      .bien-photo-disclaimer {
+        font-size: 0.62em;
+        color: #8aaabb;
+        margin-top: 2px;
+        max-width: 96px;
+        text-align: center;
+        line-height: 1.2;
+      }
+      .bien-photo-fallback {
+        width: 96px;
+        height: 96px;
+        border-radius: 10px;
+        background: var(--bien-mint);
+        border: 2px dashed var(--panel-border);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: #9ab5cb;
+        font-size: 0.70em;
+        text-align: center;
+      }
+      @media (max-width: 900px) {
+        .bien-species-photo, .bien-photo-fallback { width: 72px; height: 72px; }
+        .bien-photo-attr { max-width: 72px; }
+        .bien-photo-disclaimer { max-width: 72px; }
+      }
+      @media (max-width: 640px) {
+        .bien-species-photo-wrap { display: none; }
       }
       .well {
         border: 1px solid var(--panel-border);
@@ -1936,7 +2082,8 @@ ui <- fluidPage(
           "Query BIEN species occurrences, traits, and range evidence with the same visual language as the BIEN Traits portal."
         )
       )
-    )
+    ),
+    uiOutput("species_photo_panel")
   ),
   sidebarLayout(
     sidebarPanel(
@@ -3671,6 +3818,68 @@ server <- function(input, output, session) {
         )
       }
     )
+  })
+
+  # Render a species photo in the page header from iNaturalist (primary) or Wikipedia (fallback).
+  # Fetched after bien_results() resolves; cached per species in query_cache to avoid repeat calls.
+  # License is validated (cc-by / cc-by-sa / cc0 only for iNat). Taxon name is compared to the
+  # queried name to suppress photos for taxonomically mismatched results.
+  output$species_photo_panel <- renderUI({
+    res <- bien_results()
+    species_name <- if (!is.null(res$species) && nzchar(res$species)) {
+      res$species
+    } else {
+      str_squish(input$species)
+    }
+    if (!nzchar(species_name)) {
+      species_name <- STARTUP_SPECIES
+    }
+    species_name <- normalize_species_name(species_name)
+
+    cache_key <- paste0("photo_", tolower(species_name))
+    photo <- if (exists(cache_key, envir = query_cache)) {
+      get(cache_key, envir = query_cache)
+    } else {
+      p <- fetch_species_photo(species_name)
+      assign(cache_key, p, envir = query_cache)
+      p
+    }
+
+    if (is.null(photo)) {
+      tags$div(
+        class = "bien-species-photo-wrap",
+        tags$div(class = "bien-photo-fallback", "\U0001F33F")
+      )
+    } else {
+      is_wikipedia <- identical(photo$attribution_short, "Wikipedia")
+      tags$div(
+        class = "bien-species-photo-wrap",
+        tags$a(
+          href = photo$source_url,
+          target = "_blank",
+          rel = "noopener noreferrer",
+          tags$img(
+            src   = photo$url,
+            class = "bien-species-photo",
+            alt   = paste("Photograph of", species_name),
+            title = photo$attribution
+          )
+        ),
+        tags$p(
+          class = "bien-photo-attr",
+          tags$a(
+            href   = photo$source_url,
+            target = "_blank",
+            rel    = "noopener noreferrer",
+            photo$attribution_short
+          )
+        ),
+        tags$p(
+          class = "bien-photo-disclaimer",
+          if (is_wikipedia) "Community photo; license unverified" else "Community photo; not peer-verified"
+        )
+      )
+    }
   })
 
   # Lazy-load BIEN trait data only when the user opens a trait-focused tab.
