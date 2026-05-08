@@ -4,6 +4,14 @@ Tracks prompts that created or changed work under this project folder.
 
 ## Entries
 
+27. Date: 2026-05-08
+Prompt: Implement the security fixes from the agent team review — "SECURITY — Fix before next deployment" (Tier 1).
+Source session: current workspace session
+Outcome: Three security fixes applied to app.R:
+  (1) C-1 XSS in output$query_summary — added htmltools::htmlEscape() around all BIEN-derived and error-derived strings (occ_total_txt, source_mix_line, category_line, field_obs_source_line, introduced_line, cultivated_line, geovalid_line, range_status, map_status, trait_n, mapped_pct_line, source_mix_mismatch_note, query_source_txt, query_elapsed_txt, effective_query_txt, requested_profile_txt, occ_total_all_note, describe_sampling_mode output).
+  (2) W-9 code injection in repro scripts — replaced dQuote(species_for_code) and dQuote(sample_method) with deparse() in build_occurrence_repro_script(), build_trait_repro_script(), and build_plot_repro_script().
+  (3) NEW-W-1 supply-chain XSS via AsianPlant — added domain allowlist check in get_asianplant_species_url() so only https://asianplant.net URLs pass; all others return NA_character_.
+
 26. Date: 2026-05-08
 Prompt: For https://benquist.shinyapps.io/bien-species-shinyapp/ The front page when one immediately loads the app, the observation data points for Pinus ponderosa take a long time to load. It would be great if the observation points loaded immediately.
 Source session: current workspace session
