@@ -3119,7 +3119,7 @@ ui <- fluidPage(
           verbatimTextOutput("trait_query_code")
         ),
         tabPanel(
-          "Species External Links",
+          "Explore this species",
           br(),
           tags$p(
             style = "color:#555;max-width:900px;",
@@ -3201,7 +3201,7 @@ server <- function(input, output, session) {
     }
 
     valid_tabs <- c("About & Help", "Occurrence", "Community", "Observations",
-                    "Traits", "Range", "Download", "Species External Links", "Temporal Distribution")
+                    "Traits", "Range", "Download", "Explore this species", "Temporal Distribution")
     if (!is.null(tab_from_url) && nzchar(tab_from_url) &&
         utils::URLdecode(tab_from_url) %in% valid_tabs) {
       updateTabsetPanel(session, "main_tabs",
@@ -3233,7 +3233,7 @@ server <- function(input, output, session) {
       "Traits" = "See grouped trait counts and example values by trait name and unit at the top, with raw BIEN trait records below.",
       "Range" = "Load optional BIEN range artifacts and inspect mapped range layers when available.",
       "Download" = "Download occurrence, plot/community, and trait datasets plus matching reproducible R code.",
-      "Species External Links" = "Open external species references generated from the current species name.",
+      "Explore this species" = "Open external species references generated from the current species name.",
       "About & Help" = "Read app background, scope, and interpretation context.",
       "Use Query BIEN to run live retrieval."
     )
