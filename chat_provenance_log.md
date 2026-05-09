@@ -263,3 +263,39 @@ Outcome: Two CRITICALs diagnosed and fixed in app.R (commit 0bc1ec7, bundle 1196
   Additionally: NULL results are no longer cached permanently; only non-NULL photos are assigned to query_cache so transient network failures are retried on the next query.
   App redeployed and working. Commits 0bc1ec7 + 757da51 pushed to origin/master.
 Sat May  9 00:14:40 BST 2026: Fixed zero-mapped-coord bug for species like Pouteria reticulata where BIEN returns a mix of coord-valid and coord-null rows. The stratified datasource sampler was selecting predominantly null-coord rows. Fix prioritizes coord-valid rows in the app-level downsample (occ_limit) before prepare_occurrences QA. See app.R ~line 3300.
+Sat May  9 2026 (v2): Added SQL-level coord filter plan (fallback_coord_bearing: AND latitude IS NOT NULL) as 4th cascade step in query_occurrence_with_fallback(). Intent: force BIEN to return only lat/lon-bearing rows when strict plan returns 0 mappable. Outcome: made things worse — for Pouteria reticulata BIEN has NULL lat/lon for ALL records in the view, so coord_bearing also returned 0 rows and the strict plan's 2000-record result was discarded entirely, leaving users with 0 records shown. Commit f670207.
+Sat May  9 2026 (v3): Root cause confirmed: BIEN view stores is_geovalid=1 but latitude/longitude columns are NULL for every Pouteria reticulata record — a BIEN data quality issue. Fix: added best_nonempty_result tracking in query_occurrence_with_fallback(). When coord_bearing exhausts with 0 rows, returns the first non-empty result from an earlier (non-coord-bearing) plan using that plan's actual strategy label (not a synthetic label — coder agent identified that a synthetic "no_coords_available" label would corrupt repro scripts and count queries). UI detects the condition via "no_coord_bearing_records_in_bien_view" in query_errors notes and shows an amber banner explaining the BIEN data quality issue. Statistics table is populated; map is correctly empty. Syntax verified, deployed, commit bef6b74 pushed to origin/master.
+
+36. Date: 2026-05-09
+Prompt: Go back in the history of past issues and what we have learned. Add that to the document.
+Source session: current workspace session
+Outcome: Read the full chat_provenance_log.md (all ~280 lines, entries 1–35) and CODE_WORKFLOW_DOCUMENTATION.md to extract all historically documented bugs. Added Issues 2–12 to BIEN-SpeciesShinyApp/KNOWN_ISSUES_AND_LESSONS.md (commit 7f2fb48, prompt_log entry 518be1f):
+  Issue 2 — Synchronous HTTP photo fetch inside renderUI blocking Shiny event loop; return(NULL) inside tryCatch exiting enclosing function.
+  Issue 3 — BIEN COUNT queries in event-loop critical path freezing app on load and Summary Statistics tab open.
+  Issue 4 — FIA/plot sampling bias: ORDER BY-less LIMIT returning predominantly FIA rows for widespread species.
+  Issue 5 — Double tooltip popup from simultaneous Bootstrap plugin + custom CSS tooltip systems.
+  Issue 6 — Lucky/random species selection freezing app via sequential BIEN COUNT prechecks per candidate.
+  Issue 7 — sprintf("%,d") crash in Temporal Distribution tab (unsupported format in R; use format(..., big.mark=",")).
+  Issue 8 — Selectize autocomplete: typed text disappearing (choices reloaded per keystroke), misspellings silently discarded (create=FALSE), startup species not shown (choices=NULL on init).
+  Issue 9 — BIEN connection-slot exhaustion returning 0 records indistinguishable from true species absence.
+  Issue 10 — "Keep native only" label including is_introduced IS NULL (unknown-status) records without disclosure.
+  Issue 11 — Per-session blocking operations: accepted-name list and startup preload running once per user instead of once globally.
+  Issue 12 — ORDER BY random() query timeout: full-table sort before LIMIT on 100M+ row BIEN view.
+  All entries follow the standard format: Symptom → Diagnosis journey → Root Cause → Fix → Lessons Learned.
+
+37. Date: 2026-05-09
+Prompt: Redesign the summary statistics panel — replace flat 35-line HTML text dump with structured three-tier layout; add amber warning rail; upgrade QA chips bar; various UX fixes; deploy.
+Source session: current workspace session
+Outcome: Rewrote output$summary_stats_ui in BIEN-SpeciesShinyApp/app.R with a three-tier structured layout:
+  Tier 1: metric cards row (Records Kept, Mapped, Datasources, Traits, Plots), filter chip bar, source scorecard table, QA one-liner sentence, map coverage fraction indicator.
+  Tier 2: two collapsible <details> panels — "Filter Profile & Query" (shows active filters, query strategy, geovalid/native flags) and "Data Completeness & Gaps" (shows per-datasource record counts, coord completeness, native-status gaps).
+  Tier 3: collapsed "Diagnostics" <details> block with raw query metadata for power users.
+  Reproducibility block: citable filter-profile string for methods sections.
+  Added output$summary_warn_rail_ui: amber warning chips rendered above stats section for partial map coverage (< 80% coords mapped), fast mode active, and cultivated-status gaps (unknown fraction > 20%).
+  Upgraded QA chips bar above the map to show records as "N / Total (pct%)" format when BIEN total counts are loaded; falls back to plain N when totals unavailable.
+  Removed redundant "Scope: Western Hemisphere (BIEN)" text from recon callout (already shown in map caption).
+  Suppressed "Unknown status" chip entirely when n_unknown == 0 (removes visual noise for species with complete native-status data).
+  Added ~180 lines of new CSS covering: .summary-metric-cards, .summary-metric-card, .filter-chip-bar, .source-scorecard, .warn-rail, .warn-chip, .repro-block, collapsible details styling, tier separators.
+  Syntax verified clean: Rscript --vanilla -e "invisible(parse('app.R'))" && echo "PARSE OK".
+  Deployed to https://benquist.shinyapps.io/bien-species-shinyapp/.
+  File: BIEN-SpeciesShinyApp/app.R.
