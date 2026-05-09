@@ -63,10 +63,45 @@ safe_bien_retry <- function(call_fn, timeout_sec = 90, attempts = 1, sleep_sec =
 fetch_species_photo <- function(species_name, timeout_sec = 8) {
   if (!nzchar(trimws(species_name))) return(NULL)
 
-  # --- Primary: GBIF occurrence media ---
-  # POWO does not expose images via its public API (the images field is always empty).
-  # GBIF aggregates images from iNaturalist, Kew herbarium, NYBG, Smithsonian, and
-  # hundreds of other institutions — far better tropical coverage than iNaturalist alone.
+  # --- Primary: Wikipedia REST summary API ---
+  # Wikipedia thumbnails are often high-quality curated images.
+  # Note: POWO does not expose images via its public API (images array always empty);
+  # GBIF is used as the second fallback and includes Kew/herbarium images.
+  wiki_result <- tryCatch({
+    slug <- gsub(" ", "_", trimws(species_name))
+    resp <- httr::GET(
+      paste0("https://en.wikipedia.org/api/rest_v1/page/summary/",
+             utils::URLencode(slug, reserved = TRUE)),
+      httr::timeout(timeout_sec)
+    )
+    if (httr::http_error(resp)) stop("wiki http error")
+    if (!grepl("application/json", httr::http_type(resp), fixed = TRUE)) stop("wiki not json")
+    parsed <- jsonlite::fromJSON(
+      httr::content(resp, as = "text", encoding = "UTF-8"),
+      simplifyVector = FALSE
+    )
+    thumb_url <- parsed$originalimage$source
+    if (is.null(thumb_url) || !nzchar(as.character(thumb_url))) {
+      thumb_url <- parsed$thumbnail$source
+    }
+    if (is.null(thumb_url) || !nzchar(as.character(thumb_url))) stop("wiki no image")
+    if (!startsWith(as.character(thumb_url), "https://")) stop("wiki non-https url")
+    list(
+      url               = as.character(thumb_url),
+      attribution_short = "Wikipedia",
+      attribution       = "Wikimedia Commons",
+      source_url        = paste0("https://en.wikipedia.org/wiki/",
+                                 utils::URLencode(slug, reserved = TRUE)),
+      inat_name         = NULL
+    )
+  }, error = function(e) NULL)
+
+  if (!is.null(wiki_result)) return(wiki_result)
+
+  # --- Second: GBIF occurrence media ---
+  # POWO does not expose images via its public API (images field always empty).
+  # GBIF aggregates images from Kew herbarium, iNaturalist, NYBG, Smithsonian, and
+  # hundreds of other institutions — the best available open aggregator.
   # Two-step: (1) species/match to get usageKey, (2) occurrence/search with mediaType.
   gbif_result <- tryCatch({
     resp <- httr::GET(
@@ -100,12 +135,7 @@ fetch_species_photo <- function(species_name, timeout_sec = 8) {
     results <- parsed2$results
     if (!is.list(results) || length(results) == 0) stop("gbif no occurrences")
 
-    # Walk occurrences to find the first valid https image URL
-    img_url <- NULL
-    img_creator <- NULL
-    img_publisher <- NULL
-    img_license <- NULL
-    occ_key <- NULL
+    img_url <- NULL; img_creator <- NULL; img_publisher <- NULL; occ_key <- NULL
     for (occ in results) {
       media_list <- occ$media
       if (!is.list(media_list) || length(media_list) == 0) next
@@ -113,10 +143,9 @@ fetch_species_photo <- function(species_name, timeout_sec = 8) {
         url_candidate <- if (!is.null(med$identifier)) as.character(med$identifier) else ""
         if (!nzchar(url_candidate) || !startsWith(url_candidate, "https://")) next
         img_url       <- url_candidate
-        img_creator   <- if (!is.null(med$creator)   && nzchar(as.character(med$creator)))   as.character(med$creator)   else NULL
-        img_publisher <- if (!is.null(med$publisher)  && nzchar(as.character(med$publisher)))  as.character(med$publisher)  else NULL
-        img_license   <- if (!is.null(med$license)    && nzchar(as.character(med$license)))    as.character(med$license)    else NULL
-        occ_key       <- if (!is.null(occ$key))        as.character(occ$key)                   else NULL
+        img_creator   <- if (!is.null(med$creator)  && nzchar(as.character(med$creator)))  as.character(med$creator)  else NULL
+        img_publisher <- if (!is.null(med$publisher) && nzchar(as.character(med$publisher))) as.character(med$publisher) else NULL
+        occ_key       <- if (!is.null(occ$key)) as.character(occ$key) else NULL
         break
       }
       if (!is.null(img_url)) break
@@ -141,8 +170,7 @@ fetch_species_photo <- function(species_name, timeout_sec = 8) {
 
   if (!is.null(gbif_result)) return(gbif_result)
 
-  # --- Fallback: iNaturalist taxa API (CC-BY / CC-BY-SA / CC0 only) ---
-  # NOTE: stop() used instead of return(NULL) so errors stay within the tryCatch block.
+  # --- Third: iNaturalist taxa API (CC-BY / CC-BY-SA / CC0 only) ---
   allowed_licenses <- c("cc-by", "cc-by-sa", "cc0")
   tryCatch({
     resp <- httr::GET(
@@ -4191,7 +4219,9 @@ server <- function(input, output, session) {
         tags$div(class = "bien-photo-fallback", "\U0001F33F")
       )
     } else {
-      disclaimer_txt <- if (identical(photo$attribution_short, "GBIF")) {
+      disclaimer_txt <- if (identical(photo$attribution_short, "Wikipedia")) {
+        "Wikimedia Commons"
+      } else if (identical(photo$attribution_short, "GBIF")) {
         "Specimen/observation image via GBIF"
       } else {
         "Community photo; not peer-verified"
