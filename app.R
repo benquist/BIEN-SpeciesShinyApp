@@ -60,14 +60,91 @@ safe_bien_retry <- function(call_fn, timeout_sec = 90, attempts = 1, sleep_sec =
 # NC/ND licenses are rejected to prevent copyright violations in a public deployed app.
 # The returned iNaturalist taxon name is validated against the queried name to catch
 # silent taxonomic mismatches (estimated 10-30% in complex families).
-fetch_species_photo <- function(species_name, timeout_sec = 5) {
+fetch_species_photo <- function(species_name, timeout_sec = 8) {
   if (!nzchar(trimws(species_name))) return(NULL)
-  allowed_licenses <- c("cc-by", "cc-by-sa", "cc0")
 
-  # --- Primary: iNaturalist taxa API ---
-  # NOTE: return(NULL) inside tryCatch exits the enclosing function, bypassing the Wikipedia
-  # fallback. Use stop() instead so the error handler returns NULL from the tryCatch block.
-  inat_result <- tryCatch({
+  # --- Primary: GBIF occurrence media ---
+  # POWO does not expose images via its public API (the images field is always empty).
+  # GBIF aggregates images from iNaturalist, Kew herbarium, NYBG, Smithsonian, and
+  # hundreds of other institutions — far better tropical coverage than iNaturalist alone.
+  # Two-step: (1) species/match to get usageKey, (2) occurrence/search with mediaType.
+  gbif_result <- tryCatch({
+    resp <- httr::GET(
+      "https://api.gbif.org/v1/species/match",
+      query = list(name = species_name, kingdom = "Plantae", verbose = FALSE),
+      httr::timeout(timeout_sec)
+    )
+    if (httr::http_error(resp)) stop("gbif match http error")
+    if (!grepl("application/json", httr::http_type(resp), fixed = TRUE)) stop("gbif not json")
+    m <- jsonlite::fromJSON(
+      httr::content(resp, as = "text", encoding = "UTF-8"),
+      simplifyVector = FALSE
+    )
+    match_type <- if (!is.null(m$matchType)) as.character(m$matchType) else "NONE"
+    if (!match_type %in% c("EXACT", "FUZZY")) stop("gbif no match")
+    usage_key <- if (!is.null(m$usageKey)) as.character(m$usageKey) else ""
+    if (!nzchar(usage_key)) stop("gbif no usageKey")
+    gbif_name <- if (!is.null(m$species)) as.character(m$species) else ""
+
+    resp2 <- httr::GET(
+      "https://api.gbif.org/v1/occurrence/search",
+      query = list(taxonKey = usage_key, mediaType = "StillImage",
+                   limit = 20L, hasCoordinate = FALSE),
+      httr::timeout(timeout_sec)
+    )
+    if (httr::http_error(resp2)) stop("gbif occurrence http error")
+    parsed2 <- jsonlite::fromJSON(
+      httr::content(resp2, as = "text", encoding = "UTF-8"),
+      simplifyVector = FALSE
+    )
+    results <- parsed2$results
+    if (!is.list(results) || length(results) == 0) stop("gbif no occurrences")
+
+    # Walk occurrences to find the first valid https image URL
+    img_url <- NULL
+    img_creator <- NULL
+    img_publisher <- NULL
+    img_license <- NULL
+    occ_key <- NULL
+    for (occ in results) {
+      media_list <- occ$media
+      if (!is.list(media_list) || length(media_list) == 0) next
+      for (med in media_list) {
+        url_candidate <- if (!is.null(med$identifier)) as.character(med$identifier) else ""
+        if (!nzchar(url_candidate) || !startsWith(url_candidate, "https://")) next
+        img_url       <- url_candidate
+        img_creator   <- if (!is.null(med$creator)   && nzchar(as.character(med$creator)))   as.character(med$creator)   else NULL
+        img_publisher <- if (!is.null(med$publisher)  && nzchar(as.character(med$publisher)))  as.character(med$publisher)  else NULL
+        img_license   <- if (!is.null(med$license)    && nzchar(as.character(med$license)))    as.character(med$license)    else NULL
+        occ_key       <- if (!is.null(occ$key))        as.character(occ$key)                   else NULL
+        break
+      }
+      if (!is.null(img_url)) break
+    }
+    if (is.null(img_url)) stop("gbif no valid image url")
+
+    attr_parts <- Filter(Negate(is.null), list(img_creator, img_publisher))
+    attribution <- if (length(attr_parts) > 0) paste(attr_parts, collapse = " / ") else "GBIF"
+    source_url  <- if (!is.null(occ_key)) {
+      paste0("https://www.gbif.org/occurrence/", occ_key)
+    } else {
+      paste0("https://www.gbif.org/species/", usage_key)
+    }
+    list(
+      url               = img_url,
+      attribution_short = "GBIF",
+      attribution       = attribution,
+      source_url        = source_url,
+      inat_name         = gbif_name
+    )
+  }, error = function(e) NULL)
+
+  if (!is.null(gbif_result)) return(gbif_result)
+
+  # --- Fallback: iNaturalist taxa API (CC-BY / CC-BY-SA / CC0 only) ---
+  # NOTE: stop() used instead of return(NULL) so errors stay within the tryCatch block.
+  allowed_licenses <- c("cc-by", "cc-by-sa", "cc0")
+  tryCatch({
     resp <- httr::GET(
       "https://api.inaturalist.org/v1/taxa",
       query = list(q = species_name, rank = "species", per_page = 1L, locale = "en"),
@@ -83,7 +160,6 @@ fetch_species_photo <- function(species_name, timeout_sec = 5) {
     if (!is.list(results) || length(results) == 0) stop("inat no results")
     taxon <- results[[1]]
     inat_name <- if (!is.null(taxon$name)) taxon$name else ""
-    # Validate taxon name matches queried name (case-insensitive) to prevent mismatch display
     if (!identical(tolower(trimws(inat_name)), tolower(trimws(species_name)))) stop("inat name mismatch")
     photo <- taxon$default_photo
     if (is.null(photo)) stop("inat no default photo")
@@ -103,39 +179,10 @@ fetch_species_photo <- function(species_name, timeout_sec = 5) {
     }
     list(
       url               = photo_url,
-      attribution_short = paste0("iNaturalist · ", toupper(license_code)),
+      attribution_short = paste0("iNaturalist \u00b7 ", toupper(license_code)),
       attribution       = attribution,
       source_url        = paste0("https://www.inaturalist.org/taxa/", taxon_id),
       inat_name         = inat_name
-    )
-  }, error = function(e) NULL)
-
-  if (!is.null(inat_result)) return(inat_result)
-
-  # --- Fallback: Wikipedia REST summary API (license unverified but labeled) ---
-  tryCatch({
-    slug <- gsub(" ", "_", trimws(species_name))
-    resp <- httr::GET(
-      paste0("https://en.wikipedia.org/api/rest_v1/page/summary/",
-             utils::URLencode(slug, reserved = TRUE)),
-      httr::timeout(timeout_sec)
-    )
-    if (httr::http_error(resp)) stop("wiki http error")
-    if (!grepl("application/json", httr::http_type(resp), fixed = TRUE)) stop("wiki not json")
-    parsed <- jsonlite::fromJSON(
-      httr::content(resp, as = "text", encoding = "UTF-8"),
-      simplifyVector = FALSE
-    )
-    thumb_url <- parsed$thumbnail$source
-    if (is.null(thumb_url) || !nzchar(as.character(thumb_url))) stop("wiki no thumbnail")
-    if (!startsWith(as.character(thumb_url), "https://")) stop("wiki non-https url")
-    list(
-      url               = as.character(thumb_url),
-      attribution_short = "Wikipedia",
-      attribution       = "Wikimedia Commons (license unverified)",
-      source_url        = paste0("https://en.wikipedia.org/wiki/",
-                                 utils::URLencode(slug, reserved = TRUE)),
-      inat_name         = NULL
     )
   }, error = function(e) NULL)
 }
@@ -400,14 +447,13 @@ query_occurrence_randomized <- function(species_name, cultivated = FALSE, native
   use_randomize <- isTRUE(randomize_order) && limit > 500 && limit <= 10000
   order_clause <- if (use_randomize) "ORDER BY random()" else ""
 
-  # When require_coords=TRUE, add SQL-level latitude/longitude IS NOT NULL filter.
-  # This is the last-resort plan for species where BIEN's natural table order returns
-  # only null-coord records (e.g. Pouteria reticulata where trait/plot rows come first).
+  # When require_coords=TRUE, add SQL-level filter requiring at least one valid coordinate source.
+  # Accept records where either the float lat/lon is in-range OR a PostGIS geom is present.
+  # Records with non-null but out-of-range floats AND no geom are excluded.
   coord_bearing_clause <- if (isTRUE(require_coords)) {
     paste(
-      "AND latitude IS NOT NULL AND longitude IS NOT NULL",
-      "AND latitude BETWEEN -90 AND 90",
-      "AND longitude BETWEEN -180 AND 180"
+      "AND (geom IS NOT NULL",
+      "OR (latitude BETWEEN -90 AND 90 AND longitude BETWEEN -180 AND 180))"
     )
   } else {
     ""
@@ -421,7 +467,14 @@ query_occurrence_randomized <- function(species_name, cultivated = FALSE, native
   query <- paste(
     "SELECT scrubbed_species_binomial", taxonomy_$select,
     native_$select, political_$select,
-    ",latitude, longitude,date_collected,",
+    # Use COALESCE with a range guard so that:
+    # (1) valid float lat/lon is used when available
+    # (2) out-of-range non-null floats fall through to the PostGIS geom column
+    # (3) geom IS NULL when both sources unavailable → NULL (safe, no exception)
+    # ST_Y/ST_X on NULL::geometry = NULL; geography→geometry cast is always safe.
+    ",COALESCE(CASE WHEN latitude BETWEEN -90 AND 90 THEN latitude ELSE NULL END, ST_Y(geom::geometry)) AS latitude,",
+    "COALESCE(CASE WHEN longitude BETWEEN -180 AND 180 THEN longitude ELSE NULL END, ST_X(geom::geometry)) AS longitude,",
+    "date_collected,",
     "datasource,dataset,dataowner,custodial_institution_codes,collection_code,view_full_occurrence_individual.datasource_id",
     collection_$select, cultivated_$select, newworld_$select,
     observation_$select, geovalid_$select,
@@ -432,8 +485,6 @@ query_occurrence_randomized <- function(species_name, cultivated = FALSE, native
     "AND higher_plant_group NOT IN ('Algae','Bacteria','Fungi')",
     centroid_clause,
     "AND scrubbed_species_binomial IS NOT NULL",
-    "AND lower(coalesce(observation_type, '')) NOT LIKE '%trait%'",
-    "AND lower(coalesce(observation_type, '')) NOT LIKE '%measurement%'",
     coord_bearing_clause,
     order_clause,
     "LIMIT", as.integer(limit), ";"
@@ -4140,8 +4191,8 @@ server <- function(input, output, session) {
         tags$div(class = "bien-photo-fallback", "\U0001F33F")
       )
     } else {
-      disclaimer_txt <- if (identical(photo$attribution_short, "POWO (Kew)")) {
-        "Botanical image \u00b7 Plants of the World Online (Kew)"
+      disclaimer_txt <- if (identical(photo$attribution_short, "GBIF")) {
+        "Specimen/observation image via GBIF"
       } else {
         "Community photo; not peer-verified"
       }
