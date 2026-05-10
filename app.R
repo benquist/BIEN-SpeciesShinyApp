@@ -505,7 +505,7 @@ query_occurrence_randomized <- function(species_name, cultivated = FALSE, native
   # When the user explicitly asks to exclude cultivated AND opts in to strict-wild,
   # require is_cultivated = 0 (drop NULL/unevaluated). Otherwise fall back to the
   # default BIEN cultivated check (which permits NULLs).
-  cult_clause <- if (isTRUE(strict_wild_no_unknown) && isFALSE(cultivated)) {
+  cult_clause <- if (isTRUE(strict_wild_no_unknown) && !isTRUE(cultivated)) {
     "AND is_cultivated = 0 "
   } else {
     cultivated_$query
@@ -568,6 +568,7 @@ resolve_filter_profile <- function(input) {
   if (identical(profile, "strict")) {
     # NSR-confirmed native only (is_introduced = 0, no NULL fallback),
     # geovalid required, no fallback ladder. Empty map means no records pass.
+    # strict_wild_no_unknown is opt-in via the sidebar checkbox under strict.
     return(list(
       use_default_profile = TRUE,
       use_introduced_filter = TRUE,
@@ -575,7 +576,7 @@ resolve_filter_profile <- function(input) {
       strict_native_no_unknown = TRUE,
       use_cultivated_filter = TRUE,
       include_cultivated = FALSE,
-      strict_wild_no_unknown = FALSE,
+      strict_wild_no_unknown = if (is.null(input$strict_wild_no_unknown)) FALSE else isTRUE(input$strict_wild_no_unknown),
       only_geovalid = TRUE,
       exclude_human_observation_records = FALSE,
       only_plot_observations = FALSE
@@ -591,7 +592,7 @@ resolve_filter_profile <- function(input) {
     use_default_profile               = FALSE,
     use_introduced_filter             = !identical(origin, "all"),
     natives_only                      = identical(origin, "native_or_unknown") || identical(origin, "native_only"),
-    strict_native_no_unknown          = identical(origin, "native_only"),
+    strict_native_no_unknown          = identical(origin, "native_only") || (if (is.null(input$strict_native_no_unknown)) FALSE else isTRUE(input$strict_native_no_unknown)),
     use_cultivated_filter             = !identical(cultivation, "any"),
     include_cultivated                = identical(cultivation, "include_cultivated"),
     strict_wild_no_unknown            = if (is.null(input$strict_wild_no_unknown)) FALSE else isTRUE(input$strict_wild_no_unknown),
@@ -1167,9 +1168,13 @@ summarize_coordinate_quality <- function(occ_info) {
 
 # Run a BIEN-side COUNT(*) query so the app can report how many matching occurrence
 # records exist in BIEN without downloading all rows into the Shiny session.
-count_occurrence_records <- function(species_name, cultivated = FALSE, natives_only = TRUE, only_geovalid = TRUE, timeout_sec = 30, strict_no_unknown = FALSE) {
+count_occurrence_records <- function(species_name, cultivated = FALSE, natives_only = TRUE, only_geovalid = TRUE, timeout_sec = 30, strict_no_unknown = FALSE, strict_wild_no_unknown = FALSE) {
   count_res <- safe_bien_call({
-    cultivated_ <- BIEN:::.cultivated_check(cultivated)
+    cult_clause <- if (isTRUE(strict_wild_no_unknown) && !isTRUE(cultivated)) {
+      "AND is_cultivated = 0 "
+    } else {
+      BIEN:::.cultivated_check(cultivated)$query
+    }
     newworld_ <- BIEN:::.newworld_check(NULL)
     natives_ <- natives_check_with_null_fallback(natives_only, strict_no_unknown = strict_no_unknown)
     observation_ <- BIEN:::.observation_check(TRUE)
@@ -1179,7 +1184,7 @@ count_occurrence_records <- function(species_name, cultivated = FALSE, natives_o
       "SELECT COUNT(*) AS bien_total_records",
       "FROM view_full_occurrence_individual",
       "WHERE scrubbed_species_binomial in (", paste(sql_quote_literal(species_name), collapse = ", "), ")",
-      cultivated_$query, newworld_$query, natives_$query, observation_$query, geovalid_$query,
+      cult_clause, newworld_$query, natives_$query, observation_$query, geovalid_$query,
       "AND higher_plant_group NOT IN ('Algae','Bacteria','Fungi')",
       "AND (georef_protocol is NULL OR georef_protocol<>'county centroid')",
       "AND (is_centroid IS NULL OR is_centroid=0)",
@@ -1207,8 +1212,12 @@ count_occurrence_records <- function(species_name, cultivated = FALSE, natives_o
 # Run a BIEN-side grouped count query so the Overview can report what fraction of
 # the total matching occurrence records appear to be specimens, iNaturalist records,
 # plots/surveys, trait-linked rows, or other provenance classes.
-count_occurrence_source_mix <- function(species_name, cultivated = FALSE, natives_only = TRUE, only_geovalid = TRUE, timeout_sec = 30, strict_no_unknown = FALSE) {
-  cultivated_ <- BIEN:::.cultivated_check(cultivated)
+count_occurrence_source_mix <- function(species_name, cultivated = FALSE, natives_only = TRUE, only_geovalid = TRUE, timeout_sec = 30, strict_no_unknown = FALSE, strict_wild_no_unknown = FALSE) {
+  cult_clause <- if (isTRUE(strict_wild_no_unknown) && !isTRUE(cultivated)) {
+    "AND is_cultivated = 0 "
+  } else {
+    BIEN:::.cultivated_check(cultivated)$query
+  }
   newworld_ <- BIEN:::.newworld_check(NULL)
   natives_ <- natives_check_with_null_fallback(natives_only, strict_no_unknown = strict_no_unknown)
   observation_ <- BIEN:::.observation_check(TRUE)
@@ -1229,7 +1238,7 @@ count_occurrence_source_mix <- function(species_name, cultivated = FALSE, native
       "  ELSE 'Other' END AS source_group",
       "  FROM view_full_occurrence_individual",
       "  WHERE scrubbed_species_binomial in (", paste(sql_quote_literal(species_name), collapse = ", "), ")",
-      cultivated_$query, newworld_$query, natives_$query, observation_$query, geovalid_$query,
+      cult_clause, newworld_$query, natives_$query, observation_$query, geovalid_$query,
       "  AND higher_plant_group NOT IN ('Algae','Bacteria','Fungi')",
       "  AND (georef_protocol is NULL OR georef_protocol<>'county centroid')",
       "  AND (is_centroid IS NULL OR is_centroid=0)",
@@ -2899,6 +2908,20 @@ ui <- fluidPage(
             "Excludes points BIEN flags as geospatially invalid (e.g. swapped coordinates, out-of-range values, or internally documented georeferencing errors). Recommended to keep ON for most analyses."),
           value = TRUE)
       ),
+      conditionalPanel(
+        condition = "(input.data_profile == 'strict') || (input.data_profile == 'custom' && (input.origin_radio == 'native_only' || input.origin_radio == 'native_or_unknown'))",
+        checkboxInput("strict_native_no_unknown",
+                      "Strict native (exclude unevaluated establishment)",
+                      value = FALSE),
+        helpText("Excludes records where BIEN has not evaluated establishment status (is_introduced IS NULL). Trades recall for tighter contamination control. NSR coverage is uneven across regions and taxa.")
+      ),
+      conditionalPanel(
+        condition = "(input.data_profile == 'strict') || (input.data_profile == 'custom' && input.cultivation_radio == 'wild_only')",
+        checkboxInput("strict_wild_no_unknown",
+                      "Strict wild (exclude unevaluated cultivation)",
+                      value = FALSE),
+        helpText("Excludes records where BIEN has not evaluated cultivation status (is_cultivated IS NULL). Closes the parallel NULL-permissiveness on the cultivation axis.")
+      ),
       tags$h5("Sampling & map", style = "margin:10px 0 6px 0;font-size:0.98em;color:#444;"),
       checkboxInput("show_sampling_settings", compact_label("Show sampling & map settings", "Turn on to customize app-sample size, map cap, and balancing strategy."), value = FALSE),
       conditionalPanel(
@@ -3670,10 +3693,14 @@ server <- function(input, output, session) {
       # F3 (Issue 14 follow-up): reproduce strict-native NULL exclusion semantics.
       if (isTRUE(strict_native_no_unknown)) {
         paste(
-          "# Strict-native filter: exclude records where BIEN has not evaluated establishment",
-          "# status (is_introduced IS NULL). The app applied this filter when the data were",
-          "# downloaded; reproduce it here.",
-          "occ <- occ[!is.na(occ$is_introduced) & occ$is_introduced == 0, , drop = FALSE]",
+          "# Strict-native filter: exclude records where BIEN has not evaluated",
+          "# establishment status (is_introduced IS NULL). The app applied this filter",
+          "# when the data were downloaded; reproduce it here using the same",
+          "# type-tolerant coercion the app uses internally.",
+          ".intro_norm <- tolower(trimws(as.character(occ$is_introduced)))",
+          ".is_native <- !is.na(.intro_norm) & .intro_norm %in% c(\"0\", \"false\", \"f\", \"n\", \"native\", \"not introduced\")",
+          "occ <- occ[.is_native, , drop = FALSE]",
+          "rm(.intro_norm, .is_native)",
           "cat(\"After strict-native NULL exclusion:\", nrow(occ), \"records\\n\")",
           sep = "\n"
         )
@@ -4020,10 +4047,14 @@ server <- function(input, output, session) {
       # F3 (Issue 14 follow-up): reproduce strict-native NULL exclusion semantics.
       if (isTRUE(strict_native_no_unknown)) {
         paste(
-          "# Strict-native filter: exclude records where BIEN has not evaluated establishment",
-          "# status (is_introduced IS NULL). The app applied this filter when the data were",
-          "# downloaded; reproduce it here.",
-          "occ <- occ[!is.na(occ$is_introduced) & occ$is_introduced == 0, , drop = FALSE]",
+          "# Strict-native filter: exclude records where BIEN has not evaluated",
+          "# establishment status (is_introduced IS NULL). The app applied this filter",
+          "# when the data were downloaded; reproduce it here using the same",
+          "# type-tolerant coercion the app uses internally.",
+          ".intro_norm <- tolower(trimws(as.character(occ$is_introduced)))",
+          ".is_native <- !is.na(.intro_norm) & .intro_norm %in% c(\"0\", \"false\", \"f\", \"n\", \"native\", \"not introduced\")",
+          "occ <- occ[.is_native, , drop = FALSE]",
+          "rm(.intro_norm, .is_native)",
           "cat(\"After strict-native NULL exclusion:\", nrow(occ), \"records\\n\")",
           sep = "\n"
         )
@@ -5210,7 +5241,8 @@ server <- function(input, output, session) {
           only_geovalid = count_only_geovalid,
           timeout_sec = res$timeout_sec,
           # F2 (Issue 14 follow-up): only when natives_only is TRUE in this count.
-          strict_no_unknown = isTRUE(res$strict_native_no_unknown) && isTRUE(count_natives_only)
+          strict_no_unknown = isTRUE(res$strict_native_no_unknown) && isTRUE(count_natives_only),
+          strict_wild_no_unknown = isTRUE(res$strict_wild_no_unknown) && !isTRUE(count_include_cultivated)
         )
       }
 
@@ -5234,7 +5266,8 @@ server <- function(input, output, session) {
         only_geovalid = count_only_geovalid,
         timeout_sec = res$timeout_sec,
         # F2 (Issue 14 follow-up): only when natives_only is TRUE in this count.
-        strict_no_unknown = isTRUE(res$strict_native_no_unknown) && isTRUE(count_natives_only)
+        strict_no_unknown = isTRUE(res$strict_native_no_unknown) && isTRUE(count_natives_only),
+        strict_wild_no_unknown = isTRUE(res$strict_wild_no_unknown) && !isTRUE(count_include_cultivated)
       )
 
       out <- list(
@@ -5333,7 +5366,9 @@ server <- function(input, output, session) {
     res <- bien_results()
     if (is.null(res)) return(NULL)
     strategy <- if (!is.null(res$occ_strategy) && nzchar(res$occ_strategy)) res$occ_strategy else "strict"
-    if (identical(strategy, "strict") || identical(strategy, "startup_preloaded_local_dataset")) return(NULL)
+    if (identical(strategy, "strict") ||
+        identical(strategy, "strict_no_unknown") ||
+        identical(strategy, "startup_preloaded_local_dataset")) return(NULL)
 
     amber_style <- "background:#fff3cd;border:1px solid #ffeeba;color:#856404;
                padding:10px 14px;margin:6px 0 10px 0;border-radius:4px;
@@ -5356,6 +5391,7 @@ server <- function(input, output, session) {
     }
 
     dropped <- switch(strategy,
+      "strict_no_unknown"         = return(NULL),
       "fallback_relaxed_native"   = "native-only constraint dropped (records of any establishment status included)",
       "fallback_relaxed_geo"      = "native-only AND BIEN geovalid constraints dropped",
       "fallback_coord_bearing"    = "native-only AND geovalid dropped; SQL lat/lon-not-null guard applied",

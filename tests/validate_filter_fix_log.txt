@@ -1,4 +1,4 @@
-Loaded helpers from app.R lines 1 to 3164 
+Loaded helpers from app.R lines 1 to 3391 
 
 ====== Filter-fix validation (2026-05-10, Issue 14) ======
 Three modes per species:
@@ -15,21 +15,21 @@ Three modes per species:
   rows            : 397
   per-row col     : strict
   unique countries: 
-  elapsed         : 5.6s
+  elapsed         : 5.3s
 
 [Markhamia lutea | M2 granular default (incl IS NULL)]
   strategy        : strict
   rows            : 397
   per-row col     : strict
   unique countries: 
-  elapsed         : 5.1s
+  elapsed         : 5.4s
 
 [Markhamia lutea | M3 granular + strict native]
   strategy        : strict
   rows            : 397
   per-row col     : strict
   unique countries: 
-  elapsed         : 5.3s
+  elapsed         : 5.7s
 
 === Pinus ponderosa ===
   POWO native: Western N America (POWO/USDA)
@@ -47,26 +47,25 @@ Three modes per species:
   rows            : 1000
   per-row col     : strict
   unique countries: 
-  elapsed         : 5.3s
+  elapsed         : 5.6s
 
 [Pinus ponderosa | M3 granular + strict native]
   strategy        : strict
   rows            : 1000
   per-row col     : strict
   unique countries: 
-  elapsed         : 5.7s
+  elapsed         : 6.0s
 
 === Eucalyptus globulus ===
   POWO native: Tasmania / SE Australia (POWO)
   Strict expectation: 0 or Australia
 
 [Eucalyptus globulus | M1 strict-only profile]
-Error in initialize(value, ...) : reached elapsed time limit
-  strategy        : backend_timeout_error
-  rows            : 0
-  per-row col     : <missing>
+  strategy        : strict
+  rows            : 1000
+  per-row col     : strict
   unique countries: 
-  elapsed         : 610.4s
+  elapsed         : 5.5s
 
 [Eucalyptus globulus | M2 granular default (incl IS NULL)]
   strategy        : strict
@@ -80,35 +79,32 @@ Error in initialize(value, ...) : reached elapsed time limit
   rows            : 1000
   per-row col     : strict
   unique countries: 
-  elapsed         : 5.5s
+  elapsed         : 5.7s
 
 === Tamarix ramosissima ===
   POWO native: Central Asia native; invasive in N America
   Strict expectation: 0 or sparse
 
 [Tamarix ramosissima | M1 strict-only profile]
-  strategy        : backend_timeout_error
-  rows            : 0
-  per-row col     : <missing>
+  strategy        : strict
+  rows            : 221
+  per-row col     : strict
   unique countries: 
-  elapsed         : 62.0s
+  elapsed         : 5.3s
 
 [Tamarix ramosissima | M2 granular default (incl IS NULL)]
   strategy        : strict
   rows            : 221
   per-row col     : strict
   unique countries: 
-  elapsed         : 4.9s
+  elapsed         : 5.0s
 
 [Tamarix ramosissima | M3 granular + strict native]
   strategy        : strict
-  rows            : 219
+  rows            : 221
   per-row col     : strict
   unique countries: 
-  elapsed         : 5.2s
-Warning message:
-In postgresqlQuickSQL(conn, statement, ...) :
-  Could not create execute: SELECT scrubbed_species_binomial , verbatim_family,verbatim_scientific_name,family_matched,name_matched,name_matched_author,higher_plant_group,scrubbed_taxonomic_status,scrubbed_family,scrubbed_author ,native_status, native_status_reason,native_status_sources,is_introduced,native_status_country,native_status_state_province,native_status_county_parish  ,COALESCE(CASE WHEN latitude BETWEEN -90 AND 90 THEN latitude ELSE NULL END, ST_Y(geom::geometry)) AS latitude, COALESCE(CASE WHEN longitude BETWEEN -180 AND 180 THEN longitude ELSE NULL END, ST_X(geom::geometry)) AS longitude, date_collected, datasource,dataset,dataowner,custodial_institution_codes,collection_code,view_full_occurrence_individual.datasource_id    ,observation_type  FROM view_full_occurrence_individual WHERE scrubbed_species_binomial in ( 'Eucalyptus globulus' ) AND (is_cultivated_observation = 0 OR is_cultivated_observation IS NULL) AND is_location_cultivated IS NULL  AND (is_introduced=0 OR is_i [... truncated]
+  elapsed         : 5.0s
 
 ====== Summary ======
 
@@ -123,13 +119,13 @@ Pinus ponderosa
   M3: strategy=strict, n=1000, countries=0
 
 Eucalyptus globulus
-  M1: strategy=backend_timeout_error, n=0, countries=0
+  M1: strategy=strict, n=1000, countries=0
   M2: strategy=strict, n=1000, countries=0
   M3: strategy=strict, n=1000, countries=0
 
 Tamarix ramosissima
-  M1: strategy=backend_timeout_error, n=0, countries=0
+  M1: strategy=strict, n=221, countries=0
   M2: strategy=strict, n=221, countries=0
-  M3: strategy=strict, n=219, countries=0
+  M3: strategy=strict, n=221, countries=0
 
 Done.
