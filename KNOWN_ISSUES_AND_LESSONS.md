@@ -692,6 +692,53 @@ All items were implemented in `app.R` commit `73ec262` and deployed to shinyapps
 
 ---
 
-## Issue 14 — [Future issues documented here]
+## Issue 14 — "Conservative default profile" silently returned non-native records for Old-World taxa (Markhamia lutea case)
+
+**Status:** RESOLVED 2026-05-10 (commit pending)
+
+### Symptom
+A user querying *Markhamia lutea* (Bignoniaceae, native to tropical Africa per POWO/Kew) with the **"Conservative default profile"** checkbox enabled (the default state) received occurrence records from India, Australia, and Mexico — the species' horticultural/cultivated footprint, not its native range. Unchecking the box and re-querying with the default granular controls returned only African records, matching POWO. The two paths used semantically identical SQL filters, so the user-visible difference was *non-deterministic* and the "Conservative" label was actively misleading.
+
+### Diagnosis journey
+- Subagents `biodiversity-informatics-checker`, `taxonomy-reconciliation`, and `coder` were run against [BIEN-SpeciesShinyApp/app.R](app.R) lines 440–700, 2670–2700, 4220–4280, 5370–5670, and 6140–6175.
+- Two compounding root causes were confirmed (see below). The "non-deterministic" Africa-only vs India-Australia-Mexico difference between checked/unchecked runs was traced to BIEN backend timing — strict returned 0 mappable rows on one run (triggering the silent fallback) and not on the other.
+
+### Root cause(s)
+
+**(a) Silent auto-relaxation of the "conservative" filters.**  
+`query_occurrence_with_fallback` ran a 5-step plan ladder (`strict` → `fallback_relaxed_native` → `fallback_relaxed_geo` → `fallback_coord_bearing` → `fallback_allow_centroids`). Plans 2–5 unconditionally set `natives.only = FALSE` and (from plan 3) `only.geovalid = FALSE`, **even when the conservative profile was checked**. When BIEN's strict pass returned 0 mappable rows for an Old-World species (the common case for any taxon outside BIEN's NSR coverage), the chain advanced to `fallback_relaxed_native` and returned introduced/cultivated records labeled as if they were the conservative result. The only warning was a transient `showNotification`; exports carried no strategy provenance.
+
+**(b) `is_introduced IS NULL` was treated as "native" outside BIEN's NSR coverage.**  
+`natives_check_with_null_fallback(TRUE)` emitted SQL `AND (is_introduced=0 OR is_introduced IS NULL)`. BIEN's Native Species Resolver is New-World–centric. African records of *M. lutea* (and any Old-World native) are typically `is_introduced IS NULL` because **NSR has no checklist evidence** for those regions, *not* because the species is native there. The same NULL-permissive clause re-admitted horticultural/escaped New-World records. This was the inverse of "conservative" semantics for any taxon outside NSR's coverage footprint.
+
+**(c) The checkbox label and tooltip did not disclose either behavior.**  
+The label "Conservative default profile" with tooltip "keeps native and non-introduced records, excludes cultivated records, and keeps only BIEN geovalid coordinates" described only the strict plan. The conservative checkbox provided **no semantic guarantee distinct from the granular defaults** — both paths fed the same auto-fallback ladder.
+
+### Fix (applied 2026-05-10)
+
+1. **Renamed the checkbox** from "Conservative default profile" → **"Strict-only BIEN profile (no auto-relaxation)"** with a rewritten tooltip that explicitly documents the NSR coverage caveat and Markhamia lutea as an example. ([app.R](app.R#L2701))
+2. **Flipped the default value to `FALSE`** so the granular filter toggles are visible by default and users see exactly what filters are applied. ([app.R](app.R#L2701))
+3. **Restricted the plan ladder to `strict` only when the profile is checked.** Added `if (isTRUE(filter_cfg$use_default_profile)) plans <- plans[1]` so silent fallback is impossible under strict-only. ([app.R](app.R#L588-L596))
+4. **Added a persistent yellow banner above the occurrence map** (`output$occ_strategy_banner_ui`) that fires whenever the effective `occ_strategy` is anything other than `"strict"`. The banner names the strategy and the dropped constraints; this is now the source-of-truth for filter provenance, replacing the easily missed transient toast. ([app.R](app.R#L2948), [app.R](app.R#L5086))
+5. **Added a `bien_query_strategy` column** to every returned occurrence row in both return paths of `query_occurrence_with_fallback` so exports carry the per-row provenance of which plan produced the record. ([app.R](app.R#L666-L675), [app.R](app.R#L740-L750))
+6. **Added an opt-in "Strict native (exclude unevaluated)" checkbox** under `natives_only`. When enabled it threads `strict_native_no_unknown = TRUE` through `query_occurrence_randomized` to `natives_check_with_null_fallback`, which then emits SQL `AND is_introduced = 0` (no NULL fallback). This is the recommended setting for Old-World taxa where NSR has no coverage. ([app.R](app.R#L445-L460), [app.R](app.R#L468), [app.R](app.R#L548), [app.R](app.R#L2710-L2713))
+
+### Lessons learned
+
+1. **A "default" must mean what it says.** A checkbox labelled "Conservative" cannot legally hand off to a relaxed plan ladder without telling the user — and certainly cannot do so silently. If recall-tolerant fallback is desired, give it its own opt-in label and surface the effective strategy alongside every record.
+
+2. **Establishment-status backbones have geographic scope.** BIEN's NSR is dense in the Americas and sparse-to-absent across Africa, Asia, Australia, and most of the Old World. Any biodiversity app that surfaces a "native" filter must either (a) restrict use to the backbone's coverage footprint, or (b) offer a strict variant that excludes unevaluated records. Conflating `IS NULL` with `native` is correct only inside the backbone's coverage.
+
+3. **Per-row provenance is mandatory for filtered/fallback queries.** A single result-level `strategy` field is not enough — once a CSV is exported, the per-row provenance of which plan produced each record is lost. A `bien_query_strategy` column on the data frame makes the trade-off auditable downstream.
+
+4. **Persistent UI banners > transient `showNotification`.** Toast notifications are dismissed (intentionally or not) and never appear in screenshots, exports, or downstream reports. Anything that changes the meaning of the displayed data must persist on the UI surface alongside the data.
+
+5. **Old-World species are the canary for any New-World–trained pipeline.** When stress-testing biodiversity defaults, include taxa whose accepted distribution lies entirely outside the training/coverage domain. *Markhamia lutea*, *Eucalyptus globulus*, and *Encephalartos altensteinii* are useful diagnostic species — if the app silently returns New-World introductions for any of them, the default is wrong.
+
+6. **The `is_cultivated` column has the same NULL-permissiveness trap.** `is_cultivated = 0` does not catch escapes flagged `IS NULL`. A future issue should consider applying the same strict/permissive split to the cultivated filter.
+
+---
+
+## Issue 15 — [Future issues documented here]
 
 *New issues should be appended below using the same format: Symptom → Diagnosis journey → Root cause → Fix → Lessons learned.*
