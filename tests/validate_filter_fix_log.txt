@@ -1,0 +1,135 @@
+Loaded helpers from app.R lines 1 to 3164 
+
+====== Filter-fix validation (2026-05-10, Issue 14) ======
+Three modes per species:
+  M1 = strict-only profile (use_default = TRUE)
+  M2 = granular defaults (native-or-unknown), use_default = FALSE
+  M3 = granular + Strict native (exclude unevaluated), use_default = FALSE
+
+=== Markhamia lutea ===
+  POWO native: Tropical Africa (POWO)
+  Strict expectation: 0 or Africa-only
+
+[Markhamia lutea | M1 strict-only profile]
+  strategy        : strict
+  rows            : 397
+  per-row col     : strict
+  unique countries: 
+  elapsed         : 5.6s
+
+[Markhamia lutea | M2 granular default (incl IS NULL)]
+  strategy        : strict
+  rows            : 397
+  per-row col     : strict
+  unique countries: 
+  elapsed         : 5.1s
+
+[Markhamia lutea | M3 granular + strict native]
+  strategy        : strict
+  rows            : 397
+  per-row col     : strict
+  unique countries: 
+  elapsed         : 5.3s
+
+=== Pinus ponderosa ===
+  POWO native: Western N America (POWO/USDA)
+  Strict expectation: USA, Canada, Mexico
+
+[Pinus ponderosa | M1 strict-only profile]
+  strategy        : strict
+  rows            : 1000
+  per-row col     : strict
+  unique countries: 
+  elapsed         : 5.7s
+
+[Pinus ponderosa | M2 granular default (incl IS NULL)]
+  strategy        : strict
+  rows            : 1000
+  per-row col     : strict
+  unique countries: 
+  elapsed         : 5.3s
+
+[Pinus ponderosa | M3 granular + strict native]
+  strategy        : strict
+  rows            : 1000
+  per-row col     : strict
+  unique countries: 
+  elapsed         : 5.7s
+
+=== Eucalyptus globulus ===
+  POWO native: Tasmania / SE Australia (POWO)
+  Strict expectation: 0 or Australia
+
+[Eucalyptus globulus | M1 strict-only profile]
+Error in initialize(value, ...) : reached elapsed time limit
+  strategy        : backend_timeout_error
+  rows            : 0
+  per-row col     : <missing>
+  unique countries: 
+  elapsed         : 610.4s
+
+[Eucalyptus globulus | M2 granular default (incl IS NULL)]
+  strategy        : strict
+  rows            : 1000
+  per-row col     : strict
+  unique countries: 
+  elapsed         : 5.5s
+
+[Eucalyptus globulus | M3 granular + strict native]
+  strategy        : strict
+  rows            : 1000
+  per-row col     : strict
+  unique countries: 
+  elapsed         : 5.5s
+
+=== Tamarix ramosissima ===
+  POWO native: Central Asia native; invasive in N America
+  Strict expectation: 0 or sparse
+
+[Tamarix ramosissima | M1 strict-only profile]
+  strategy        : backend_timeout_error
+  rows            : 0
+  per-row col     : <missing>
+  unique countries: 
+  elapsed         : 62.0s
+
+[Tamarix ramosissima | M2 granular default (incl IS NULL)]
+  strategy        : strict
+  rows            : 221
+  per-row col     : strict
+  unique countries: 
+  elapsed         : 4.9s
+
+[Tamarix ramosissima | M3 granular + strict native]
+  strategy        : strict
+  rows            : 219
+  per-row col     : strict
+  unique countries: 
+  elapsed         : 5.2s
+Warning message:
+In postgresqlQuickSQL(conn, statement, ...) :
+  Could not create execute: SELECT scrubbed_species_binomial , verbatim_family,verbatim_scientific_name,family_matched,name_matched,name_matched_author,higher_plant_group,scrubbed_taxonomic_status,scrubbed_family,scrubbed_author ,native_status, native_status_reason,native_status_sources,is_introduced,native_status_country,native_status_state_province,native_status_county_parish  ,COALESCE(CASE WHEN latitude BETWEEN -90 AND 90 THEN latitude ELSE NULL END, ST_Y(geom::geometry)) AS latitude, COALESCE(CASE WHEN longitude BETWEEN -180 AND 180 THEN longitude ELSE NULL END, ST_X(geom::geometry)) AS longitude, date_collected, datasource,dataset,dataowner,custodial_institution_codes,collection_code,view_full_occurrence_individual.datasource_id    ,observation_type  FROM view_full_occurrence_individual WHERE scrubbed_species_binomial in ( 'Eucalyptus globulus' ) AND (is_cultivated_observation = 0 OR is_cultivated_observation IS NULL) AND is_location_cultivated IS NULL  AND (is_introduced=0 OR is_i [... truncated]
+
+====== Summary ======
+
+Markhamia lutea
+  M1: strategy=strict, n=397, countries=0
+  M2: strategy=strict, n=397, countries=0
+  M3: strategy=strict, n=397, countries=0
+
+Pinus ponderosa
+  M1: strategy=strict, n=1000, countries=0
+  M2: strategy=strict, n=1000, countries=0
+  M3: strategy=strict, n=1000, countries=0
+
+Eucalyptus globulus
+  M1: strategy=backend_timeout_error, n=0, countries=0
+  M2: strategy=strict, n=1000, countries=0
+  M3: strategy=strict, n=1000, countries=0
+
+Tamarix ramosissima
+  M1: strategy=backend_timeout_error, n=0, countries=0
+  M2: strategy=strict, n=221, countries=0
+  M3: strategy=strict, n=219, countries=0
+
+Done.
