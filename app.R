@@ -808,14 +808,24 @@ query_occurrence_with_fallback <- function(species_name, input, occ_limit, occ_p
         break
       }
 
-      # Timeouts on strict filters are common for large species; go to coord_bearing
-      # directly (if available) so null-coord table-order species get a chance too.
+      # Timeouts on Plan 1 ("strict") are almost always caused by ORDER BY random()
+      # scanning a large candidate pool. Plans 2+ use limit <= 500, so ORDER BY
+      # random() never fires for them (threshold is limit > 500). Therefore, if the
+      # timed-out plan is "strict", just fall through to Plan 2 — it retries the
+      # same filter semantics but with limit=500, which is fast.
+      # Only jump directly to coord_bearing if a fallback plan (Plans 2+) has also
+      # timed out, meaning the smaller limit couldn't help either.
       if (is_bien_timeout_error(err_msg)) {
-        if (has_coord_bearing_plan) {
-          skip_to_coord_bearing <- TRUE
-        } else {
-          skip_to_relaxed_geo <- TRUE
+        if (!identical(plan$label, "strict")) {
+          # A relaxed plan timed out — go to coord_bearing (smaller-limit plans won't help).
+          if (has_coord_bearing_plan) {
+            skip_to_coord_bearing <- TRUE
+          } else if (has_relaxed_geo_plan) {
+            skip_to_relaxed_geo <- TRUE
+          }
         }
+        # If plan$label == "strict": no skip flags set; 'next' falls through to Plan 2,
+        # which uses limit=500 and avoids ORDER BY random() entirely.
         next
       }
     }
