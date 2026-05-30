@@ -2660,6 +2660,160 @@ ui <- fluidPage(
         max-height: 200px;
         overflow-y: auto;
       }
+
+      /* ── Disclosure semantic tokens ───────────────────────────────────── */
+      :root {
+        --disc-green:        #15803d;
+        --disc-green-bg:     #f0fdf4;
+        --disc-green-border: #86efac;
+        --disc-amber:        #b45309;
+        --disc-amber-bg:     #fffbeb;
+        --disc-amber-border: #fcd34d;
+        --disc-orange:       #c2410c;
+        --disc-orange-bg:    #fff7ed;
+        --disc-orange-border: #fb923c;
+        --disc-red:          #be123c;
+        --disc-red-bg:       #fff1f2;
+        --disc-red-border:   #fda4af;
+        --disc-gray:         #6b7280;
+        --disc-gray-bg:      #f9fafb;
+        --disc-gray-border:  #d1d5db;
+      }
+
+      /* ── Persistent fallback banner ───────────────────────────────────── */
+      .fb-banner {
+        display: flex;
+        align-items: flex-start;
+        gap: 10px;
+        border-radius: 0 4px 4px 0;
+        padding: 10px 16px;
+        margin-bottom: 12px;
+      }
+      .fb-banner-amber {
+        background: var(--disc-amber-bg);
+        border: 1px solid var(--disc-amber-border);
+        border-left: 4px solid var(--disc-amber);
+      }
+      .fb-banner-orange {
+        background: var(--disc-orange-bg);
+        border: 1px solid var(--disc-orange-border);
+        border-left: 4px solid var(--disc-orange);
+      }
+      .fb-banner-icon { font-size: 1.1em; flex-shrink: 0; margin-top: 1px; }
+      .fb-banner-headline {
+        font-size: 0.87em;
+        font-weight: 600;
+        color: var(--disc-amber);
+        margin: 0 0 2px 0;
+      }
+      .fb-banner-orange .fb-banner-headline { color: var(--disc-orange); }
+      .fb-banner-body { font-size: 0.82em; color: #374151; margin: 0; line-height: 1.55; }
+      .fb-banner-introduced { display: inline; font-weight: 700; color: var(--disc-red); }
+
+      /* ── QA chip color variants ───────────────────────────────────────── */
+      .qa-chip.qa-green  { background: var(--disc-green-bg);  border-color: var(--disc-green-border); }
+      .qa-chip.qa-green  .qa-value { color: var(--disc-green); }
+      .qa-chip.qa-amber  { background: var(--disc-amber-bg);  border-color: var(--disc-amber-border); }
+      .qa-chip.qa-amber  .qa-value { color: var(--disc-amber); }
+      .qa-chip.qa-orange { background: var(--disc-orange-bg); border-color: var(--disc-orange-border); }
+      .qa-chip.qa-orange .qa-value { color: var(--disc-orange); }
+      .qa-chip.qa-red    { background: var(--disc-red-bg);    border-color: var(--disc-red-border); }
+      .qa-chip.qa-red    .qa-value { color: var(--disc-red); }
+      .qa-chip.qa-gray   { background: var(--disc-gray-bg);   border-color: var(--disc-gray-border); }
+      .qa-chip.qa-gray   .qa-value { color: var(--disc-gray); }
+
+      /* ── Flag composition bar ─────────────────────────────────────────── */
+      .flag-comp-section {
+        margin-top: 14px;
+        padding-top: 12px;
+        border-top: 1px solid #f0f0f0;
+      }
+      .flag-comp-header {
+        font-size: 0.80em;
+        font-weight: 600;
+        color: #374151;
+        margin-bottom: 10px;
+      }
+      .flag-comp-row { margin-bottom: 10px; }
+      .flag-comp-sublabel {
+        font-size: 0.74em;
+        font-weight: 600;
+        color: #6b7280;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+        margin-bottom: 3px;
+      }
+      .flag-comp-bar-wrap { margin: 2px 0 4px 0; }
+      .flag-comp-bar {
+        display: flex;
+        height: 10px;
+        border-radius: 5px;
+        overflow: hidden;
+        width: 100%;
+        margin-bottom: 4px;
+      }
+      .flag-comp-bar-seg { transition: width 0.2s; }
+      .flag-comp-legend {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        font-size: 0.75em;
+        color: #374151;
+      }
+      .flag-comp-dot {
+        display: inline-block;
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        margin-right: 3px;
+        vertical-align: middle;
+      }
+      .flag-comp-note {
+        font-size: 0.72em;
+        color: #9ca3af;
+        font-style: italic;
+        margin-top: 6px;
+      }
+
+      /* ── SDM guidance panel ───────────────────────────────────────────── */
+      .sdm-guidance-panel {
+        border: 1px solid var(--disc-amber-border);
+        border-left: 4px solid var(--disc-amber);
+        border-radius: 0 6px 6px 0;
+        margin-bottom: 18px;
+        overflow: hidden;
+      }
+      .sdm-guidance-header {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 10px 14px;
+        background: var(--disc-amber-bg);
+        cursor: pointer;
+        font-size: 0.87em;
+        font-weight: 600;
+        color: var(--disc-amber);
+        list-style: none;
+      }
+      .sdm-guidance-header::-webkit-details-marker { display: none; }
+      .sdm-guidance-body {
+        padding: 12px 16px;
+        background: #fff;
+        font-size: 0.83em;
+        color: #374151;
+        line-height: 1.65;
+      }
+      .sdm-note-row {
+        display: flex;
+        align-items: flex-start;
+        gap: 8px;
+        padding: 6px 0;
+        border-bottom: 1px solid #f3f4f6;
+      }
+      .sdm-note-row:last-child { border-bottom: none; }
+      .sdm-note-icon { flex-shrink: 0; font-size: 1em; margin-top: 1px; }
+      .sdm-note-text { flex: 1; }
+      .sdm-note-value { font-weight: 600; color: #111827; }
     "))
   ),
   tags$div(
@@ -2829,28 +2983,51 @@ ui <- fluidPage(
       conditionalPanel(
         condition = "input.data_profile === 'standard'",
         tags$div(
-          style = "font-size:0.87em;color:#444;background:#f5faf5;border-left:3px solid #2c7a34;padding:5px 8px;margin:0 0 6px 0;border-radius:2px;",
-          "Native or NSR-unevaluated \u00b7 Wild records only \u00b7 Geovalid coordinates.",
+          style = "font-size:0.87em;color:#444;background:#f5faf5;border-left:3px solid #2c7a34;padding:5px 8px;margin:0 0 4px 0;border-radius:2px;",
+          "Confirmed non-introduced or NSR-unevaluated records; cultivation-unassessed records included; geovalid.",
           tags$br(),
-          tags$span(style = "color:#666;", "Filters auto-relax if strict query returns no records.")
+          tags$span(style = "color:#666;", "Filters auto-relax if no results found. An amber banner appears if fallback was triggered.")
+        ),
+        tags$details(
+          style = "font-size:0.82em;margin:0 0 6px 0;",
+          tags$summary(style = "color:#9ca3af;cursor:pointer;user-select:none;", "\u25b8 Limitations"),
+          tags$ul(
+            style = "color:#6b7280;margin:4px 0 0 0;padding-left:16px;line-height:1.6;",
+            tags$li(tags$strong("NSR-unevaluated \u2260 confirmed native."), " Records with is_introduced\u2009=\u2009NULL have not been assessed by the BIEN Native Species Resolver (NSR). They are not confirmed non-introduced and may represent introduced populations."),
+            tags$li(tags$strong("Cultivation-unassessed records are included."), " The default filter passes is_cultivated\u2009IS\u2009NULL \u2014 these are not confirmed wild occurrences."),
+            tags$li(tags$strong("Filters auto-relax via a fallback ladder."), " At maximum relaxation, confirmed-invasive records may be included. The amber banner states which tier was reached."),
+            tags$li(tags$strong("BIEN covers the Western Hemisphere only."), " For Old World species, Standard may return only the invaded Americas range.")
+          )
         )
       ),
       conditionalPanel(
         condition = "input.data_profile === 'strict'",
         tags$div(
-          style = "font-size:0.87em;color:#444;background:#fff8e1;border-left:3px solid #e6a817;padding:5px 8px;margin:0 0 6px 0;border-radius:2px;",
-          tags$strong("NSR-confirmed native only \u00b7 Wild records only \u00b7 Geovalid."),
+          style = "font-size:0.87em;color:#444;background:#fff8e1;border-left:3px solid #e6a817;padding:5px 8px;margin:0 0 4px 0;border-radius:2px;",
+          tags$strong("NSR-confirmed non-introduced; confirmed wild; geovalid. 500-record cap."),
           tags$br(),
           tags$span(style = "color:#666;",
-            "No auto-fallback \u2014 empty map means no records pass these criteria. ",
-            "Recommended for Old World taxa where BIEN NSR coverage is limited.")
+            "No filter relaxation \u2014 empty map means no records pass these criteria. Empty result is a valid, informative outcome.")
+        ),
+        tags$details(
+          style = "font-size:0.82em;margin:0 0 6px 0;",
+          tags$summary(style = "color:#9ca3af;cursor:pointer;user-select:none;", "\u25b8 Limitations"),
+          tags$ul(
+            style = "color:#6b7280;margin:4px 0 0 0;padding-left:16px;line-height:1.6;",
+            tags$li(tags$strong("500-record cap in natural table order."), " Strict returns at most 500 records in database ingestion order \u2014 not spatially random. Apply spatial thinning before SDM use."),
+            tags$li(tags$strong("Centroid status not fully resolved."), " is_centroid\u2009IS\u2009NULL records pass Strict; these may include county-center coordinates with 10\u2013100\u202fkm positional uncertainty."),
+            tags$li(tags$strong("Old World taxa will often return zero records."), " BIEN NSR coverage is primarily Western Hemisphere. Zero records does not mean the species is absent from BIEN."),
+            tags$li(tags$strong("Record reproducibility requires the database version."), " Re-running later may return different records. Record version with BIEN_metadata_database_version() in R.")
+          )
         )
       ),
       conditionalPanel(
         condition = "input.data_profile === 'custom'",
         tags$div(
           style = "font-size:0.87em;color:#444;background:#f0f4ff;border-left:3px solid #4a6fd4;padding:5px 8px;margin:0 0 6px 0;border-radius:2px;",
-          "Custom filters active. Auto-fallback ladder enabled."
+          "Set your own introduced-status, cultivation-status, and coordinate-precision filters manually.",
+          tags$br(),
+          tags$span(style="color:#888;", "Fallback does not occur in Custom mode \u2014 no-record queries return empty without a banner.")
         )
       ),
 
@@ -2892,8 +3069,8 @@ ui <- fluidPage(
           "cultivation_radio",
           label = NULL,
           choices = c(
-            "Wild records only"                      = "wild_only",
-            "Include cultivated / managed plantings"  = "include_cultivated",
+            "Wild or cultivation-unassessed"         = "wild_only",
+            "Include confirmed cultivated records"    = "include_cultivated",
             "All records (no filter)"                = "any"
           ),
           selected = "wild_only"
@@ -2934,7 +3111,7 @@ ui <- fluidPage(
           condition = "input.randomize_occurrence_sample == true",
           selectInput("map_sampling_method", compact_label("Method", "How to balance the app sample when many records are available."), choices = c("Datasource" = "datasource", "Observation type" = "observation_type", "Observation category" = "observation_category", "Random sample" = "random", "First returned" = "head"), selected = "datasource")
         ),
-        selectInput("map_color_by", compact_label("Color scheme", "Color points by broad category or raw BIEN observation_type."), choices = c("Observation category" = "category", "Raw BIEN observation_type" = "type"), selected = "category")
+        selectInput("map_color_by", compact_label("Color scheme", "Color points by broad category, raw BIEN observation_type, or established/introduced status."), choices = c("Observation category" = "category", "Introduced status (is_introduced)" = "introduced", "Raw BIEN observation_type" = "type"), selected = "category")
       ),
       tags$h5("Advanced", style = "margin:10px 0 6px 0;font-size:0.98em;color:#444;"),
       checkboxInput("show_runtime_settings", compact_label("Show advanced settings", "Turn on to customize observation-source exclusions, trait limits, optional range query behavior, and timeout."), value = FALSE),
@@ -3180,6 +3357,7 @@ ui <- fluidPage(
           uiOutput("slow_query_alert"),
           br(),
           uiOutput("summary_warn_rail_ui"),
+          uiOutput("flag_composition_ui"),
           tags$p(
             style = "color:#555;max-width:900px;font-size:0.9em;",
             "Statistics for the current map. Load full BIEN totals and source fractions on demand."
@@ -3306,6 +3484,19 @@ ui <- fluidPage(
           "Download",
           br(),
           tags$style(HTML("#bien_query_code, #plot_query_code, #trait_query_code { max-height: 450px; overflow-y: auto; overflow-x: auto; font-size:0.85em; }")),
+
+          # SDM & Reproducibility Guidance panel
+          tags$details(
+            class = "sdm-guidance-panel",
+            tags$summary(
+              class = "sdm-guidance-header",
+              "\u26a0\ufe0f SDM & Reproducibility Notes \u2014 expand before downloading"
+            ),
+            tags$div(
+              class = "sdm-guidance-body",
+              uiOutput("sdm_guidance_body_ui")
+            )
+          ),
 
           # Reproducibility notice banner
           tags$div(
@@ -4851,6 +5042,60 @@ server <- function(input, output, session) {
   )
 
 
+  output$sdm_guidance_body_ui <- renderUI({
+    res <- bien_results()
+    if (is.null(res)) return(NULL)
+
+    strategy <- if (!is.null(res$occ_strategy) && nzchar(res$occ_strategy)) res$occ_strategy else "strict"
+    occ <- if (is.data.frame(res$occurrences)) res$occurrences else NULL
+    n <- if (!is.null(occ)) nrow(occ) else 0L
+
+    # Introduced-status composition for SDM warning
+    intro_col <- find_first_col(occ, c("is_introduced", "native_status"))
+    n_intro <- if (!is.null(intro_col) && !is.null(occ)) {
+      raw <- tolower(trimws(as.character(occ[[intro_col]])))
+      sum(raw %in% c("1", "true", "t", "i"), na.rm = TRUE)
+    } else 0L
+    n_null <- if (!is.null(intro_col) && !is.null(occ)) {
+      raw <- tolower(trimws(as.character(occ[[intro_col]])))
+      sum(is.na(raw) | raw == "", na.rm = TRUE)
+    } else n
+
+    pct_null <- if (n > 0) round(100 * n_null / n) else 0L
+    pct_intro <- if (n > 0) round(100 * n_intro / n) else 0L
+    fallback_active <- !(strategy %in% c("strict", "strict_no_unknown", "startup_preloaded_local_dataset", "none"))
+
+    sdm_note <- function(icon, label, value) {
+      tags$div(class = "sdm-note-row",
+        tags$span(class = "sdm-note-icon", icon),
+        tags$span(class = "sdm-note-text",
+          tags$strong(label), tags$span(class = "sdm-note-value", value))
+      )
+    }
+
+    tagList(
+      sdm_note("\U0001F4CB", "Active profile:", if (strategy %in% c("strict", "strict_no_unknown")) "Strict" else
+        if (strategy == "startup_preloaded_local_dataset") "Standard (startup sample)" else
+        if (fallback_active) paste0("Standard \u2014 fallback active (", strategy, ")") else "Standard"),
+      sdm_note("\U0001F9EE", "Records in current download:", format(n, big.mark = ",")),
+      sdm_note("\u26a0\ufe0f", "NSR-unevaluated records (is_introduced = NULL):",
+        sprintf("%d (%d%%) \u2014 these are not confirmed native. Do not treat as native-range data without further vetting.", n_null, pct_null)),
+      if (pct_intro > 0) sdm_note("\u274c", "NSR-confirmed introduced (is_introduced = 1):",
+        sprintf("%d (%d%%) \u2014 these are confirmed introduced records and should be excluded from native-range SDM.", n_intro, pct_intro)),
+      if (fallback_active) sdm_note("\u26a0\ufe0f", "Fallback was triggered:",
+        "Strict filters returned no records; filters were relaxed. See the orange/amber banner on the Occurrence tab for the specific tier reached. Downloaded records may include introduced or geospatially unverified data."),
+      tags$div(
+        style = "margin-top:12px;font-size:0.79em;color:#6b7280;border-top:1px solid #f3f4f6;padding-top:8px;",
+        tags$strong("Reproducibility: "),
+        "Record which BIEN database version was active when you queried (",
+        tags$code("BIEN::BIEN_metadata_database_version()"), "). ",
+        "Query results can change as new data are ingested into BIEN. ",
+        "The R scripts on this page use the public BIEN R API and may return slightly different rows than the app\u2019s internal SQL. ",
+        "Always apply spatial thinning and flag-based filtering after download before SDM training."
+      )
+    )
+  })
+
   output$download_row_counts_ui <- renderUI({
     res <- bien_results()
     if (is.null(res) || !is.list(res)) return(NULL)
@@ -5366,65 +5611,210 @@ server <- function(input, output, session) {
     res <- bien_results()
     if (is.null(res)) return(NULL)
     strategy <- if (!is.null(res$occ_strategy) && nzchar(res$occ_strategy)) res$occ_strategy else "strict"
-    if (identical(strategy, "strict") ||
-        identical(strategy, "strict_no_unknown") ||
-        identical(strategy, "startup_preloaded_local_dataset")) return(NULL)
 
-    amber_style <- "background:#fff3cd;border:1px solid #ffeeba;color:#856404;
-               padding:10px 14px;margin:6px 0 10px 0;border-radius:4px;
-               font-size:0.95em;"
+    # No banner for clean runs or startup
+    if (strategy %in% c("strict", "strict_no_unknown", "startup_preloaded_local_dataset")) return(NULL)
 
-    # F7 (Issue 14 follow-up): three distinct failure messages.
+    # Helper to build a banner div
+    make_banner <- function(tier_class, icon, headline, body_html) {
+      tags$div(
+        class = paste("fb-banner", tier_class),
+        tags$span(class = "fb-banner-icon", icon),
+        tags$div(
+          tags$p(class = "fb-banner-headline", headline),
+          tags$p(class = "fb-banner-body", body_html)
+        )
+      )
+    }
+
     if (identical(strategy, "backend_timeout_error")) {
-      return(tags$div(
-        style = amber_style,
-        tags$strong("Filter notice: "),
-        "BIEN backend timed out before the strict-only query completed. Try (a) lowering App sample size below 500 to skip random ordering, or (b) unticking 'Strict-only BIEN profile' to enable the relaxation ladder. Do not interpret the empty map as 'no native records exist'."
+      return(make_banner(
+        "fb-banner-amber", "\u26a0\ufe0f",
+        "BIEN backend timed out before the strict query completed",
+        tagList(
+          "Results may be incomplete. Try (a) lowering App sample size below 500 in Sampling & map settings, or (b) switching to Standard profile to enable the relaxation ladder. ",
+          tags$strong("Do not interpret an empty map as \u2018no records exist\u2019.")
+        )
       ))
     }
     if (identical(strategy, "none")) {
-      return(tags$div(
-        style = amber_style,
-        tags$strong("Filter notice: "),
-        "Strict plan returned zero records and no fallback plans were attempted. This can mean (a) BIEN has no strict-eligible native records for this name, (b) the species name did not resolve in BIEN's TNRS, or (c) authorship is needed to disambiguate a homonym. Untick 'Strict-only BIEN profile' to test the relaxation ladder."
+      return(make_banner(
+        "fb-banner-amber", "\u26a0\ufe0f",
+        "Query returned no records under the current filters",
+        tagList(
+          "This can mean (a) BIEN has no records passing these criteria, (b) the species name did not resolve in BIEN\u2019s TNRS, or (c) authorship is needed to disambiguate a homonym. ",
+          "Switch to Standard profile to test the auto-relaxation ladder."
+        )
+      ))
+    }
+    if (identical(strategy, "backend_connection_error")) {
+      return(make_banner(
+        "fb-banner-orange", "\u274c",
+        "BIEN backend connection error \u2014 no records loaded",
+        "Check your network connection and try again. If the problem persists, the BIEN database may be temporarily unavailable."
       ))
     }
 
-    dropped <- switch(strategy,
-      "strict_no_unknown"         = return(NULL),
-      "fallback_relaxed_native"   = "native-only constraint dropped (records of any establishment status included)",
-      "fallback_relaxed_geo"      = "native-only AND BIEN geovalid constraints dropped",
-      "fallback_coord_bearing"    = "native-only AND geovalid dropped; SQL lat/lon-not-null guard applied",
-      "fallback_allow_centroids"  = "native-only AND geovalid dropped; county-centroid georeferences allowed (county-level precision)",
-      "backend_connection_error"  = "BIEN backend connection error — no records loaded",
-      paste("non-strict strategy:", strategy)
+    # Tier-based persistent banners for fallback ladder
+    tier_info <- switch(strategy,
+      "fallback_relaxed_native" = list(
+        tier = 1L,
+        class = "fb-banner-amber",
+        icon = "\u26a0\ufe0f",
+        headline = "FALLBACK ACTIVE \u00b7 Tier\u00a01: introduced-status filter relaxed",
+        body = tagList(
+          "No records were found when restricting to non-introduced or NSR-unevaluated records. ",
+          "The app has automatically dropped the introduced-status requirement. ",
+          tags$strong("Results now include all records regardless of BIEN NSR classification, "),
+          "including records confirmed as introduced by the Native Species Resolver (is_introduced\u2009=\u20091). ",
+          "These results may over-represent the species\u2019s invaded range. ",
+          "Use the Statistics tab \u2192 Flag composition for counts by is_introduced value. ",
+          "This profile is ", tags$strong("not suitable for native-range SDM/ENM calibration without post-hoc filtering.")
+        )
+      ),
+      "fallback_relaxed_geo" = list(
+        tier = 2L,
+        class = "fb-banner-amber",
+        icon = "\u26a0\ufe0f",
+        headline = "FALLBACK ACTIVE \u00b7 Tier\u00a02: geovalid AND introduced-status filters relaxed",
+        body = tagList(
+          "Tier\u00a01 (native filter) and Tier\u00a02 (geovalid filter) were both relaxed. ",
+          "Results include records of any establishment status AND records BIEN has flagged as geospatially invalid. ",
+          tags$strong("Coordinates may be imprecise or erroneous. "),
+          "Check is_geovalid in the flag composition chart before using these coordinates for spatial analysis."
+        )
+      ),
+      "fallback_coord_bearing" = list(
+        tier = 3L,
+        class = "fb-banner-orange",
+        icon = "\u26a0\ufe0f",
+        headline = "FALLBACK ACTIVE \u00b7 Tier\u00a03: lat/lon SQL guard applied",
+        body = tagList(
+          "Native, geovalid, and geovalid filters all returned no results. The app applied a minimal lat/lon not-null guard. ",
+          tags$strong("Coordinate quality is unverified. "),
+          "These results should not be used for range mapping or SDM without manual coordinate review."
+        )
+      ),
+      "fallback_allow_centroids" = list(
+        tier = 4L,
+        class = "fb-banner-orange",
+        icon = "\u274c",
+        headline = "FALLBACK ACTIVE \u00b7 Tier\u00a04: county-centroid georeferences included",
+        body = tagList(
+          "All prior plans returned no results. The app is now including records with county-level centroid coordinates. ",
+          tags$strong("County centroids create artificial point clusters at administrative centers"),
+          " and will severely bias any SDM or density estimate. Each centroid may represent 10\u2013100\u202fkm of positional uncertainty. ",
+          "These results are best used only to confirm presence at the country/state level, not for any coordinate-reliant analysis."
+        )
+      ),
+      NULL
     )
 
-    sdm_warn <- tags$div(
-      class = "occ-banner-sdm-warning",
-      "Not suitable for SDM/ENM calibration — see Filter Provenance."
-    )
+    if (is.null(tier_info)) {
+      # Generic fallback for unrecognised strategies
+      return(make_banner(
+        "fb-banner-amber", "\u26a0\ufe0f",
+        paste("Non-default query strategy active:", strategy),
+        "The displayed records may not match the selected profile\u2019s strict semantics."
+      ))
+    }
 
-    body <- tagList(
-      tags$strong("Filter notice: "),
-      sprintf("Effective BIEN query strategy is '%s'. ", strategy),
-      dropped, ". ",
-      tags$br(),
-      tags$em("Records shown do not match the strict-profile semantics. To restore strict-only behavior, check the 'Strict-only BIEN profile (no auto-relaxation)' box in the sidebar."),
-      sdm_warn
-    )
+    out <- make_banner(tier_info$class, tier_info$icon, tier_info$headline, tier_info$body)
 
-    if (identical(strategy, "fallback_allow_centroids")) {
-      return(tagList(
+    if (tier_info$tier >= 4L) {
+      out <- tagList(
         tags$div(
           class = "occ-banner-strong",
-          "STRONG WARNING: county/admin centroids create artificial point clusters that look like sampling hotspots and will severely bias an SDM."
+          "\u26a0\ufe0f STRONG WARNING: county/admin centroids create artificial point clusters that look like sampling hotspots and will severely bias an SDM."
         ),
-        tags$div(style = amber_style, body)
-      ))
+        out
+      )
+    }
+    out
+  })
+
+  # ── Flag composition bars (is_introduced / is_cultivated / is_geovalid) ─
+  output$flag_composition_ui <- renderUI({
+    res <- bien_results()
+    if (is.null(res) || is.null(res$occurrences)) return(NULL)
+    occ <- if (is.data.frame(res$occurrences)) res$occurrences else NULL
+    if (is.null(occ) || nrow(occ) == 0) return(NULL)
+    n <- nrow(occ)
+
+    make_flag_bar <- function(df, col_candidates, pos_vals, neg_vals, pos_col, neg_col, null_col,
+                              pos_label, neg_label, null_label) {
+      col <- find_first_col(df, col_candidates)
+      if (is.null(col)) return(NULL)
+      raw   <- tolower(trimws(as.character(df[[col]])))
+      n_pos  <- sum(raw %in% pos_vals, na.rm = TRUE)
+      n_neg  <- sum(raw %in% neg_vals, na.rm = TRUE)
+      n_null <- n - n_pos - n_neg
+      pct <- function(x) round(100 * x / n)
+
+      tags$div(
+        class = "flag-comp-row",
+        tags$div(class = "flag-comp-bar",
+          if (n_pos > 0) tags$div(class = "flag-comp-bar-seg",
+            style = sprintf("width:%d%%;background:%s;", pct(n_pos), pos_col)),
+          if (n_null > 0) tags$div(class = "flag-comp-bar-seg",
+            style = sprintf("width:%d%%;background:%s;", pct(n_null), null_col)),
+          if (n_neg > 0) tags$div(class = "flag-comp-bar-seg",
+            style = sprintf("width:%d%%;background:%s;", pct(n_neg), neg_col))
+        ),
+        tags$div(class = "flag-comp-legend",
+          if (n_pos > 0) tags$span(
+            tags$span(class = "flag-comp-dot", style = paste0("background:", pos_col)),
+            sprintf("%s: %d (%d%%)", pos_label, n_pos, pct(n_pos))),
+          if (n_null > 0) tags$span(
+            tags$span(class = "flag-comp-dot", style = paste0("background:", null_col)),
+            sprintf("%s: %d (%d%%)", null_label, n_null, pct(n_null))),
+          if (n_neg > 0) tags$span(
+            tags$span(class = "flag-comp-dot", style = paste0("background:", neg_col)),
+            sprintf("%s: %d (%d%%)", neg_label, n_neg, pct(n_neg)))
+        )
+      )
     }
 
-    tags$div(style = amber_style, body)
+    intro_bar <- make_flag_bar(occ,
+      c("is_introduced", "native_status"),
+      c("0", "false", "f"), c("1", "true", "t", "i"),
+      "#15803d", "#be123c", "#9ca3af",
+      "Non-introduced (=0)", "Introduced (=1)", "NSR-unevaluated (NULL)")
+
+    cult_bar <- make_flag_bar(occ,
+      c("is_cultivated"),
+      c("0", "false", "f"), c("1", "true", "t"),
+      "#2563eb", "#d97706", "#d1d5db",
+      "Not cultivated (=0)", "Cultivated (=1)", "Unevaluated (NULL)")
+
+    geo_bar <- make_flag_bar(occ,
+      c("is_geovalid"),
+      c("1", "true", "t"), c("0", "false", "f"),
+      "#15803d", "#be123c", "#d1d5db",
+      "Geovalid (=1)", "Invalid (=0)", "Unverified (NULL)")
+
+    if (is.null(intro_bar) && is.null(cult_bar) && is.null(geo_bar)) return(NULL)
+
+    tags$div(
+      class = "flag-comp-section",
+      tags$div(class = "flag-comp-header",
+        sprintf("Flag Composition (n\u202f=\u202f%d returned records)", n)),
+      if (!is.null(intro_bar)) tagList(
+        tags$div(class = "flag-comp-sublabel", "Introduced status (is_introduced)"),
+        tags$div(class = "flag-comp-bar-wrap", intro_bar),
+        tags$p(class = "flag-comp-note",
+          "NSR-unevaluated (\u2260 confirmed native) \u2014 BIEN NSR has not assessed whether these records are native or introduced. ",
+          "This is the most common value in BIEN. It does not mean confirmed native.")
+      ),
+      if (!is.null(cult_bar)) tagList(
+        tags$div(class = "flag-comp-sublabel", "Cultivation status (is_cultivated)"),
+        tags$div(class = "flag-comp-bar-wrap", cult_bar)
+      ),
+      if (!is.null(geo_bar)) tagList(
+        tags$div(class = "flag-comp-sublabel", "Coordinate validity (is_geovalid)"),
+        tags$div(class = "flag-comp-bar-wrap", geo_bar)
+      )
+    )
   })
 
   # ── QA chips bar above the occurrence map ───────────────────────────────
@@ -6413,21 +6803,42 @@ server <- function(input, output, session) {
 
     color_by <- if (is.null(input$map_color_by) || !nzchar(input$map_color_by)) "category" else input$map_color_by
     obs_type_col <- find_first_col(df, c("observation_type", "observation.type"))
+    intro_col_map <- find_first_col(df, c("is_introduced", "native_status"))
 
-    if (identical(color_by, "category") && "observation_category" %in% names(df)) {
+    if (identical(color_by, "introduced") && !is.null(intro_col_map)) {
+      raw_vals <- as.character(df[[intro_col_map]])
+      intro_lvls <- c("Non-introduced (is_introduced=0)", "NSR-unevaluated (status unknown)", "NSR-confirmed introduced (is_introduced=1)")
+      color_vals <- dplyr::case_when(
+        trimws(tolower(raw_vals)) %in% c("0", "false", "f", "n", "native", "not introduced") ~ intro_lvls[1],
+        trimws(tolower(raw_vals)) %in% c("1", "true", "t", "i", "introduced")                 ~ intro_lvls[3],
+        TRUE                                                                                    ~ intro_lvls[2]
+      )
+      legend_title <- "Introduced status"
+      legend_vals  <- intro_lvls[intro_lvls %in% unique(color_vals)]
+      pal <- colorFactor(
+        palette = setNames(c("#15803d", "#9ca3af", "#be123c"), intro_lvls),
+        levels  = intro_lvls,
+        na.color = "#9ca3af"
+      )
+    } else if (identical(color_by, "category") && "observation_category" %in% names(df)) {
       color_vals <- as.character(df$observation_category)
+      color_vals[is.na(color_vals) | color_vals == ""] <- "unknown"
       legend_title <- "Observation category"
+      legend_vals  <- sort(unique(color_vals))
+      pal <- colorFactor(
+        palette = c("#1b9e77", "#d95f02", "#7570b3", "#e7298a", "#66a61e", "#e6ab02", "#a6761d", "#666666"),
+        domain = legend_vals
+      )
     } else {
       color_vals <- if (!is.null(obs_type_col)) as.character(df[[obs_type_col]]) else rep("unknown", nrow(df))
+      color_vals[is.na(color_vals) | color_vals == ""] <- "unknown"
       legend_title <- "Observation type"
+      legend_vals  <- sort(unique(color_vals))
+      pal <- colorFactor(
+        palette = c("#1b9e77", "#d95f02", "#7570b3", "#e7298a", "#66a61e", "#e6ab02", "#a6761d", "#666666"),
+        domain = legend_vals
+      )
     }
-
-    color_vals[is.na(color_vals) | color_vals == ""] <- "unknown"
-    legend_vals <- sort(unique(color_vals))
-    pal <- colorFactor(
-      palette = c("#1b9e77", "#d95f02", "#7570b3", "#e7298a", "#66a61e", "#e6ab02", "#a6761d", "#666666"),
-      domain = legend_vals
-    )
 
     map <- map %>% addCircleMarkers(
       lng = df[[lon_col]],
