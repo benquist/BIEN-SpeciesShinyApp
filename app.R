@@ -670,6 +670,9 @@ query_occurrence_with_fallback <- function(species_name, input, occ_limit, occ_p
   skip_to_relaxed_geo   <- FALSE
   skip_to_coord_bearing <- FALSE
   skip_to_allow_centroids <- FALSE
+  # TRUE when Plan 1 ("strict") returned 0 rows with no error — drives "zero_result_native_widened"
+  # strategy label so the UI shows a distinct ecological disclosure (not a timeout/error banner).
+  zero_row_strict_empty <- FALSE
 
   for (plan in plans) {
     if (isTRUE(skip_to_relaxed_geo) && !identical(plan$label, "fallback_relaxed_geo") && !identical(plan$label, "fallback_coord_bearing") && !identical(plan$label, "fallback_allow_centroids")) {
@@ -767,6 +770,10 @@ query_occurrence_with_fallback <- function(species_name, input, occ_limit, occ_p
       strategy_label <- plan$label
       if (identical(plan$label, "strict") && isTRUE(strict_native_no_unknown) && isTRUE(plan$natives.only)) {
         strategy_label <- "strict_no_unknown"
+      } else if (isTRUE(zero_row_strict_empty) && !identical(plan$label, "strict")) {
+        # Plan 1 returned 0 rows and we advanced to this plan — use a distinct strategy label
+        # so the UI shows the correct ecological disclosure rather than the timeout/error banner.
+        strategy_label <- "zero_result_native_widened"
       }
       native_filter_mode <- if (!isTRUE(plan$natives.only)) {
         "all_records"
@@ -790,13 +797,27 @@ query_occurrence_with_fallback <- function(species_name, input, occ_limit, occ_p
       ))
     }
 
-    # When fallback_coord_bearing returns 0 rows (no records with lat/lon after all
-    # relaxations), try allow_centroids which drops the county-centroid exclusion.
-    # This recovers species like Pouteria reticulata where BIEN's only georeferenced
-    # records are county centroids — excluded by the normal filters.
-    if (is.data.frame(res$result) && nrow(res$result) == 0 && identical(plan$label, "fallback_coord_bearing") && has_allow_centroids_plan) {
-      notes <- c(notes, "coord_bearing_empty_triggered_allow_centroids_pass")
-      skip_to_allow_centroids <- TRUE
+    # Zero-row advancement: when a plan returns no records and no error, advance to
+    # the next plan in the ladder. Uses res$status == "empty" which correctly handles
+    # both NULL results and zero-row data.frames from safe_bien_retry (unlike a bare
+    # nrow(res$result) == 0 check, which silently fails when result is NULL).
+    # Plan 3 (fallback_relaxed_geo) skips Plan 4 (fallback_coord_bearing) on zero rows:
+    # coord_bearing is a strict subset of relaxed_geo, so if Plan 3 returns 0 rows,
+    # Plan 4 is mathematically guaranteed to return 0 rows as well.
+    if (identical(res$status, "empty")) {
+      if (identical(plan$label, "strict")) {
+        notes <- c(notes, "zero_row_on_strict_advancing_to_fallback_relaxed_native")
+        zero_row_strict_empty <- TRUE
+      } else if (identical(plan$label, "fallback_relaxed_native")) {
+        notes <- c(notes, "zero_row_on_fallback_relaxed_native_advancing_to_fallback_relaxed_geo")
+      } else if (identical(plan$label, "fallback_relaxed_geo")) {
+        notes <- c(notes, "zero_row_on_fallback_relaxed_geo_advancing_to_fallback_allow_centroids")
+        if (has_allow_centroids_plan) skip_to_allow_centroids <- TRUE
+      } else if (identical(plan$label, "fallback_coord_bearing")) {
+        notes <- c(notes, "coord_bearing_empty_triggered_allow_centroids_pass")
+        if (has_allow_centroids_plan) skip_to_allow_centroids <- TRUE
+      }
+      next
     }
 
     if (inherits(res$result, "error")) {
@@ -874,7 +895,9 @@ query_occurrence_with_fallback <- function(species_name, input, occ_limit, occ_p
   } else if (is_bien_timeout_error(notes)) {
     "backend_timeout_error"
   } else {
-    "none"
+    # "no_bien_records": all plans exhausted with zero rows (species genuinely absent
+    # from BIEN, unresolved synonym, or homonym requiring authorship disambiguation).
+    "no_bien_records"
   }
   list(
     data = last_result,
@@ -5660,7 +5683,7 @@ server <- function(input, output, session) {
         )
       ))
     }
-    if (identical(strategy, "none")) {
+    if (strategy %in% c("none", "no_bien_records")) {
       return(make_banner(
         "fb-banner-amber", "\u26a0\ufe0f",
         "Query returned no records under the current filters",
@@ -5680,6 +5703,45 @@ server <- function(input, output, session) {
 
     # Tier-based persistent banners for fallback ladder
     tier_info <- switch(strategy,
+      "zero_result_native_widened" = list(
+        tier = 0L,
+        class = "fb-banner-amber",
+        icon = "\u2139\ufe0f",
+        headline = "Native-status filter returned 0 records \u2014 showing all-origin results",
+        body = tagList(
+          "Your selected profile passes only records where the BIEN Native Species Resolver (NSR) ",
+          "has not confirmed introduced status \u2014 either confirmed non-introduced (is_introduced\u2009=\u20090) ",
+          "or NSR-unevaluated (is_introduced IS NULL). ",
+          "No records meeting this criterion currently exist in the BIEN dataset for this species, ",
+          "so the native-status filter was automatically removed. ",
+          tags$strong("The map now shows all BIEN records regardless of establishment status, "),
+          "including occurrences BIEN has confirmed as introduced (is_introduced\u2009=\u20091). ",
+          "These records may represent the species\u2019s invaded range rather than its native distribution. ",
+          "Do not use these records for native-range SDM/ENM calibration or IUCN AOO/EOO calculations ",
+          "without post-hoc filtering to confirmed non-introduced records. ",
+          "For invasion biology or climate-matching analyses, these introduced-range records are appropriate. ",
+          "To suppress auto-widening entirely, select the ",
+          tags$strong("Strict"), " profile.",
+          tags$details(
+            style = "margin-top:6px;",
+            tags$summary(
+              style = "font-size:0.82em;cursor:pointer;color:#b45309;font-weight:600;",
+              "What happened?"
+            ),
+            tags$p(
+              style = "font-size:0.82em;margin:6px 0 0 0;color:#374151;line-height:1.55;",
+              "BIEN stores an introduced-status flag (is_introduced) assigned by the Native Species ",
+              "Resolver (NSR). Your profile\u2019s native filter excludes records where is_introduced\u2009=\u20091 ",
+              "and requires either is_introduced\u2009=\u20090 (confirmed non-introduced) or NSR-unevaluated status. ",
+              "For this species, every BIEN occurrence record carries is_introduced\u2009=\u20091, meaning NSR ",
+              "has evaluated all records and classified them as introduced at the collection location. ",
+              "Because no records survive that filter, the app automatically widened the query to include ",
+              "all BIEN records. This is not a data error \u2014 it reflects BIEN\u2019s current taxonomic and ",
+              "geographic assessment for this species at these localities."
+            )
+          )
+        )
+      ),
       "fallback_relaxed_native" = list(
         tier = 1L,
         class = "fb-banner-amber",
@@ -6880,6 +6942,22 @@ server <- function(input, output, session) {
         title = legend_title,
         opacity = 0.9
       )
+
+    # Amber map control when zero-row fallback fired: visually anchors the disclosure
+    # to the map itself so users see it while interacting with points.
+    if (identical(res$occ_strategy, "zero_result_native_widened")) {
+      map <- map %>% addControl(
+        html = paste0(
+          "<div style='background:rgba(255,251,235,0.93);",
+          "border:1px solid #fcd34d;border-left:3px solid #b45309;",
+          "border-radius:3px;padding:3px 8px;font-size:0.72em;",
+          "color:#b45309;font-weight:600;line-height:1.4;'>",
+          "\u2139\ufe0f\u00a0All-origin records \u00b7 native filter removed",
+          "</div>"
+        ),
+        position = "topright"
+      )
+    }
 
     map %>% fitBounds(
       lng1 = min(df[[lon_col]], na.rm = TRUE),
