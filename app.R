@@ -2996,7 +2996,7 @@ ui <- fluidPage(
             tags$li(tags$strong("NSR-unevaluated \u2260 confirmed native."), " Records with is_introduced\u2009=\u2009NULL have not been assessed by the BIEN Native Species Resolver (NSR). They are not confirmed non-introduced and may represent introduced populations."),
             tags$li(tags$strong("Cultivation-unassessed records are included."), " The default filter passes is_cultivated\u2009IS\u2009NULL \u2014 these are not confirmed wild occurrences."),
             tags$li(tags$strong("Filters auto-relax via a fallback ladder."), " At maximum relaxation, confirmed-invasive records may be included. The amber banner states which tier was reached."),
-            tags$li(tags$strong("BIEN covers the Western Hemisphere only."), " For Old World species, Standard may return only the invaded Americas range.")
+            tags$li(tags$strong("BIEN covers the Western Hemisphere only."), " Standard mode excludes NSR-confirmed introduced (is_introduced\u2009=\u20091) records. For Old World species, this removes many Americas-introduced records, so the random sample often skews toward Old World occurrences with unevaluated status (IS\u2009NULL). Those records are not confirmed native\u2014they have simply not been assessed by NSR. Conversely, 'All records' in Custom mode includes the large pool of Americas-introduced records and may appear \u2018more restricted\u2019 geographically due to BIEN's Americas-heavy collection density.")
           )
         )
       ),
@@ -3054,6 +3054,19 @@ ui <- fluidPage(
             "NSR-confirmed native only (is_introduced = 0)" = "native_only"
           ),
           selected = "native_or_unknown"
+        ),
+
+        # Coverage note: shown only when 'All records' is selected.
+        # For Old World species with BIEN-evaluated introduced Americas populations,
+        # 'All records' includes many is_introduced=1 Americas records, making the
+        # random sample disproportionately Americas-concentrated — appearing MORE
+        # geographically restricted than Standard, which excludes those records.
+        conditionalPanel(
+          condition = "input.data_profile === 'custom' && input.origin_radio === 'all'",
+          tags$div(
+            style = "font-size:0.82em;color:#7c5c00;background:#fff3cd;border-left:3px solid #e6a817;padding:4px 8px;margin:-2px 0 6px 0;border-radius:2px;",
+            HTML("<strong>Coverage note:</strong> BIEN's record pool is Americas-concentrated. For Old World species whose Americas populations have been evaluated by BIEN's NSR (is_introduced\u2009=\u20091), 'All records' admits those numerous Americas-introduced records into the random sample. The 1\u2009000-record random draw may then appear more Americas-restricted than Standard mode, which excludes NSR-confirmed introduced records. 'All records' is the least <em>filter</em>-restrictive option, not the least <em>geographically</em>-restrictive option.")
+          )
         ),
 
         tags$div(
