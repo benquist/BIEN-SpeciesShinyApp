@@ -2743,6 +2743,43 @@ ui <- fluidPage(
       .fb-banner-body { font-size: 0.82em; color: #374151; margin: 0; line-height: 1.55; }
       .fb-banner-introduced { display: inline; font-weight: 700; color: var(--disc-red); }
 
+      /* ── Sidebar accordion ────────────────────────────────────────────── */
+      .bien-accordion {
+        border: 1px solid #e5e7eb;
+        border-radius: 6px;
+        margin: 6px 0 8px 0;
+        overflow: hidden;
+      }
+      .bien-accordion-summary {
+        list-style: none;
+        background: #f1f5f9;
+        padding: 7px 12px;
+        cursor: pointer;
+        font-weight: 600;
+        font-size: 0.93em;
+        color: #334155;
+        display: block;
+        user-select: none;
+      }
+      .bien-accordion-summary::-webkit-details-marker { display: none; }
+      details.bien-accordion[open] > .bien-accordion-summary {
+        border-bottom: 1px solid #e5e7eb;
+      }
+      .bien-accordion-body { padding: 8px 10px 4px 10px; }
+
+      /* ── SDM readiness chip ───────────────────────────────────────────── */
+      .sdm-chip {
+        padding: 4px 10px;
+        border-radius: 4px;
+        font-size: 0.80em;
+        font-weight: 600;
+        margin: 2px 0 6px 0;
+        display: inline-block;
+      }
+      .sdm-chip-ok   { background: #d1fae5; color: #065f46; border: 1px solid #6ee7b7; }
+      .sdm-chip-warn { background: #fffbeb; color: #92400e; border: 1px solid #fcd34d; }
+      .sdm-chip-bad  { background: #fef2f2; color: #7f1d1d; border: 1px solid #fca5a5; }
+
       /* ── QA chip color variants ───────────────────────────────────────── */
       .qa-chip.qa-green  { background: var(--disc-green-bg);  border-color: var(--disc-green-border); }
       .qa-chip.qa-green  .qa-value { color: var(--disc-green); }
@@ -2998,11 +3035,8 @@ ui <- fluidPage(
         style = "font-size:0.92em;color:#555;margin:6px 0 10px 0;",
         "Change filters, then click Query BIEN."
       ),
-      tags$hr(),
-      tags$h4("Settings", style = "margin:0 0 8px 0;font-size:1.08em;"),
-
-      # ── Tier 1: Data Profile ───────────────────────────────────────────────
-      tags$h5("Data profile", style = "margin:6px 0 4px 0;font-size:0.98em;color:#444;"),
+      HTML('<details class="bien-accordion"><summary class="bien-accordion-summary">&#9656;&thinsp;Data Profile &amp; Filters</summary><div class="bien-accordion-body">'),
+      tags$div(style = "font-size:0.88em;font-weight:600;color:#444;margin-bottom:4px;margin-top:2px;", "Data profile"),
       radioButtons(
         "data_profile",
         label = NULL,
@@ -3145,8 +3179,9 @@ ui <- fluidPage(
                       value = FALSE),
         helpText("Excludes records where BIEN has not evaluated cultivation status (is_cultivated IS NULL). Closes the parallel NULL-permissiveness on the cultivation axis.")
       ),
-      tags$h5("Sampling & map", style = "margin:10px 0 6px 0;font-size:0.98em;color:#444;"),
-      checkboxInput("show_sampling_settings", compact_label("Show sampling & map settings", "Turn on to customize app-sample size, map cap, and balancing strategy."), value = FALSE),
+      HTML('</div></details>'),
+      HTML('<details class="bien-accordion"><summary class="bien-accordion-summary">&#9656;&thinsp;Map &amp; Sampling</summary><div class="bien-accordion-body">'),
+      checkboxInput("show_sampling_settings", compact_label("Sampling settings", "Customize app-sample size, map cap, and balancing strategy."), value = FALSE),
       conditionalPanel(
         condition = "input.show_sampling_settings == true",
         numericInput("occurrence_limit", compact_label("Sample size", "Maximum occurrence rows retained in the app sample."), value = 1000, min = 200, max = 50000, step = 200),
@@ -3174,9 +3209,24 @@ ui <- fluidPage(
           value = TRUE),
         numericInput("query_timeout", compact_label("Step timeout (seconds)", "Timeout budget per BIEN retrieval step."), value = 90, min = 30, max = 300, step = 15)
       ),
+      HTML("</div></details>"),
       width = 3
     ),
     mainPanel(
+      tags$script(HTML("
+        $(document).ready(function() {
+          setTimeout(function() {
+            var nav = document.querySelector('#main_tabs .nav-tabs');
+            if (!nav) return;
+            var items = Array.from(nav.children);
+            var aboutLi = items.find(function(li) {
+              var a = li.querySelector('a');
+              return a && a.textContent.trim() === 'About & Help';
+            });
+            if (aboutLi) nav.appendChild(aboutLi);
+          }, 300);
+        });
+      ")),
       uiOutput("taxon_match_banner_ui"),
       tabsetPanel(
         id = "main_tabs",
@@ -3395,7 +3445,9 @@ ui <- fluidPage(
           br(),
           uiOutput("recon_callout_ui"),
           uiOutput("qa_chips_bar_ui"),
+          uiOutput("sdm_readiness_chip_ui"),
           uiOutput("occ_strategy_banner_ui"),
+          uiOutput("flag_composition_ui"),
           leafletOutput("occurrence_map", height = 550),
           uiOutput("map_caption_ui"),
           br(),
@@ -3403,7 +3455,6 @@ ui <- fluidPage(
           uiOutput("slow_query_alert"),
           br(),
           uiOutput("summary_warn_rail_ui"),
-          uiOutput("flag_composition_ui"),
           tags$p(
             style = "color:#555;max-width:900px;font-size:0.9em;",
             "Statistics for the current map. Load full BIEN totals and source fractions on demand."
@@ -5983,6 +6034,27 @@ server <- function(input, output, session) {
       do.call(tags$div, c(list(class = "qa-chips-bar"), chip_list)),
       null_footnote
     )
+  })
+
+  # ── SDM readiness chip: filter quality indicator above the occurrence map ─
+  output$sdm_readiness_chip_ui <- renderUI({
+    res <- bien_results()
+    if (is.null(res) || is.null(res$occ_strategy)) return(NULL)
+    strategy <- res$occ_strategy
+    if (!nzchar(strategy)) return(NULL)
+    if (strategy %in% c("strict", "strict_no_unknown")) {
+      tags$div(class = "sdm-chip sdm-chip-ok",
+        "\u2714 SDM-ready \u2014 native, wild, and geovalid filters applied")
+    } else if (strategy %in% c("fallback_relaxed_native", "zero_result_native_widened",
+                                "fallback_relaxed_geo", "fallback_coord_bearing")) {
+      tags$div(class = "sdm-chip sdm-chip-warn",
+        "\u26a0 SDM review needed \u2014 one or more filters were auto-relaxed; check introduced-status composition")
+    } else if (identical(strategy, "fallback_allow_centroids")) {
+      tags$div(class = "sdm-chip sdm-chip-bad",
+        "\u2715 Not recommended for SDM calibration \u2014 centroid coordinates included; positional uncertainty 10\u2013100\u202fkm")
+    } else {
+      NULL
+    }
   })
 
   # ── Map caption: sampling disclosure below the occurrence map ────────────
