@@ -2780,6 +2780,68 @@ ui <- fluidPage(
       .sdm-chip-warn { background: #fffbeb; color: #92400e; border: 1px solid #fcd34d; }
       .sdm-chip-bad  { background: #fef2f2; color: #7f1d1d; border: 1px solid #fca5a5; }
 
+      /* ── Profile selector cards ──────────────────────────────────────────── */
+      #data_profile .radio { display: block; margin: 0; }
+      #data_profile .radio label {
+        display: block;
+        border: 1.5px solid #d1d5db;
+        border-radius: 6px;
+        padding: 7px 11px;
+        margin: 3px 0;
+        cursor: pointer;
+        font-size: 0.87em;
+        background: #fafafa;
+        transition: border-color 0.12s, background 0.12s;
+      }
+      #data_profile .radio input[type='radio']:checked + label {
+        border-color: #2c7a34;
+        background: #f0faf0;
+        border-left: 4px solid #2c7a34;
+        font-weight: 600;
+        color: #1b4d22;
+      }
+      #data_profile .radio label:hover { border-color: #9ca3af; background: #f3f4f6; }
+      #data_profile .radio input[type='radio'] { position: absolute; opacity: 0; width: 0; height: 0; }
+
+      /* ── Onboarding banner ───────────────────────────────────────────── */
+      .bien-onboard {
+        background: #f0f9ff;
+        border: 1px solid #bae6fd;
+        border-left: 4px solid #0ea5e9;
+        border-radius: 0 6px 6px 0;
+        padding: 10px 14px;
+        margin-bottom: 8px;
+        font-size: 0.9em;
+        color: #0c4a6e;
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        flex-wrap: wrap;
+      }
+      .bien-onboard-steps { font-weight: 600; flex: 1; min-width: 200px; }
+      .bien-onboard-dismiss {
+        cursor: pointer;
+        color: #0369a1;
+        font-size: 0.82em;
+        white-space: nowrap;
+        text-decoration: underline;
+      }
+
+      /* ── Copy R code strip ───────────────────────────────────────────── */
+      .occ-rcode-strip {
+        background: #f8f9fa;
+        border: 1px solid #e5e7eb;
+        border-radius: 6px;
+        padding: 6px 12px;
+        margin: 0 0 6px 0;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        font-size: 0.84em;
+        color: #374151;
+      }
+      .occ-rcode-strip-label { flex: 1; }
+
       /* ── QA chip color variants ───────────────────────────────────────── */
       .qa-chip.qa-green  { background: var(--disc-green-bg);  border-color: var(--disc-green-border); }
       .qa-chip.qa-green  .qa-value { color: var(--disc-green); }
@@ -3040,11 +3102,12 @@ ui <- fluidPage(
       radioButtons(
         "data_profile",
         label = NULL,
-        choices = c(
-          "Standard (auto-fallback)"    = "standard",
-          "Strict (no fallback)"        = "strict",
-          "Custom"                      = "custom"
+        choiceNames = list(
+          HTML("<span><strong>Standard</strong> &mdash; filters widen if needed</span>"),
+          HTML("<span><strong>Strict</strong> &mdash; no widening &nbsp;<span style='color:#2c7a34;font-size:0.9em;'>&#10004; SDM-safe</span></span>"),
+          HTML("<span><strong>Custom</strong> &mdash; manual control</span>")
         ),
+        choiceValues = list("standard", "strict", "custom"),
         selected = "standard"
       ),
       conditionalPanel(
@@ -3053,7 +3116,7 @@ ui <- fluidPage(
           style = "font-size:0.87em;color:#444;background:#f5faf5;border-left:3px solid #2c7a34;padding:5px 8px;margin:0 0 4px 0;border-radius:2px;",
           "Confirmed non-introduced or NSR-unevaluated records; cultivation-unassessed records included; geovalid.",
           tags$br(),
-          tags$span(style = "color:#666;", "Filters auto-relax if no results found. An amber banner appears if fallback was triggered.")
+          tags$span(style = "color:#666;", "Filters widen automatically if no records pass. An amber banner appears when widening occurs.")
         ),
         tags$details(
           style = "font-size:0.82em;margin:0 0 6px 0;",
@@ -3062,7 +3125,7 @@ ui <- fluidPage(
             style = "color:#6b7280;margin:4px 0 0 0;padding-left:16px;line-height:1.6;",
             tags$li(tags$strong("NSR-unevaluated \u2260 confirmed native."), " Records with is_introduced\u2009=\u2009NULL have not been assessed by the BIEN Native Species Resolver (NSR). They are not confirmed non-introduced and may represent introduced populations."),
             tags$li(tags$strong("Cultivation-unassessed records are included."), " The default filter passes is_cultivated\u2009IS\u2009NULL \u2014 these are not confirmed wild occurrences."),
-            tags$li(tags$strong("Filters auto-relax via a fallback ladder."), " At maximum relaxation, confirmed-invasive records may be included. The amber banner states which tier was reached."),
+            tags$li(tags$strong("Filters widen step-by-step via a relaxation ladder."), " At maximum relaxation, confirmed-invasive records may be included. The amber banner states which tier was reached."),
             tags$li(tags$strong("BIEN covers the Western Hemisphere only."), " Standard mode excludes NSR-confirmed introduced (is_introduced\u2009=\u20091) records. For Old World species, this removes many Americas-introduced records, so the random sample often skews toward Old World occurrences with unevaluated status (IS\u2009NULL). Those records are not confirmed native\u2014they have simply not been assessed by NSR. Conversely, 'All records' in Custom mode includes the large pool of Americas-introduced records and may appear \u2018more restricted\u2019 geographically due to BIEN's Americas-heavy collection density.")
           )
         )
@@ -3071,10 +3134,12 @@ ui <- fluidPage(
         condition = "input.data_profile === 'strict'",
         tags$div(
           style = "font-size:0.87em;color:#444;background:#fff8e1;border-left:3px solid #e6a817;padding:5px 8px;margin:0 0 4px 0;border-radius:2px;",
+          tags$span(style = "color:#2c7a34;font-weight:700;", "\u2714 Preferred profile for SDM calibration."),
+          tags$br(),
           tags$strong("NSR-confirmed non-introduced; confirmed wild; geovalid. 500-record cap."),
           tags$br(),
           tags$span(style = "color:#666;",
-            "No filter relaxation \u2014 empty map means no records pass these criteria. Empty result is a valid, informative outcome.")
+            "No filter widening \u2014 empty map means no records pass these criteria. Empty result is a valid, informative outcome.")
         ),
         tags$details(
           style = "font-size:0.82em;margin:0 0 6px 0;",
@@ -3225,6 +3290,17 @@ ui <- fluidPage(
             });
             if (aboutLi) nav.appendChild(aboutLi);
           }, 300);
+        });
+      ")),
+      tags$script(HTML("
+        Shiny.addCustomMessageHandler('bien_copy_to_clipboard', function(text) {
+          navigator.clipboard.writeText(text).then(function() {
+            var btn = document.getElementById('copy_occ_r_code_btn');
+            if (btn) { btn.textContent = '\u2713 Copied!'; setTimeout(function() { btn.innerHTML = '\uD83D\uDCCB Copy R code'; }, 2200); }
+          }).catch(function() {
+            var btn = document.getElementById('copy_occ_r_code_btn');
+            if (btn) { btn.textContent = 'Copy unavailable'; }
+          });
         });
       ")),
       uiOutput("taxon_match_banner_ui"),
@@ -3443,12 +3519,14 @@ ui <- fluidPage(
         tabPanel(
           "Occurrence",
           br(),
+          uiOutput("onboarding_banner_ui"),
           uiOutput("recon_callout_ui"),
           uiOutput("qa_chips_bar_ui"),
           uiOutput("sdm_readiness_chip_ui"),
           uiOutput("occ_strategy_banner_ui"),
           uiOutput("flag_composition_ui"),
-          leafletOutput("occurrence_map", height = 550),
+          uiOutput("occ_copy_r_code_ui"),
+          leafletOutput("occurrence_map", height = 620),
           uiOutput("map_caption_ui"),
           br(),
           uiOutput("overview_notice"),
@@ -6034,6 +6112,48 @@ server <- function(input, output, session) {
       do.call(tags$div, c(list(class = "qa-chips-bar"), chip_list)),
       null_footnote
     )
+  })
+
+  # ── Onboarding banner: shown only when no query has run yet (Change 10) ─────
+  output$onboarding_banner_ui <- renderUI({
+    res <- bien_results()
+    if (!is.null(res) && !is.null(res$species) && nzchar(res$species)) return(NULL)
+    tags$div(
+      class = "bien-onboard",
+      tags$span(
+        class = "bien-onboard-steps",
+        HTML("<strong>Get started:</strong> &nbsp;1\u2009 Type a species name &nbsp;\u2192&nbsp; 2\u2009 Choose a data profile &nbsp;\u2192&nbsp; 3\u2009 Click \u2018Query BIEN\u2019")
+      )
+    )
+  })
+
+  # ── Copy R code strip: compact button above the map (Change 11) ──────────
+  output$occ_copy_r_code_ui <- renderUI({
+    res <- bien_results()
+    if (is.null(res) || is.null(res$species) || !nzchar(res$species)) return(NULL)
+    tags$div(
+      class = "occ-rcode-strip",
+      tags$span(
+        class = "occ-rcode-strip-label",
+        HTML("<strong>Reproducible R code</strong> \u2014 query parameters for this result")
+      ),
+      actionButton(
+        "copy_occ_r_code_btn",
+        HTML("\U0001F4CB Copy R code"),
+        class = "btn btn-default btn-xs"
+      )
+    )
+  })
+
+  observeEvent(input$copy_occ_r_code_btn, {
+    res <- bien_results()
+    if (is.null(res)) return()
+    code_text <- tryCatch(
+      paste(build_occurrence_repro_script(res), collapse = "\n"),
+      error = function(e) NULL
+    )
+    if (!is.null(code_text))
+      session$sendCustomMessage("bien_copy_to_clipboard", code_text)
   })
 
   # ── SDM readiness chip: filter quality indicator above the occurrence map ─
