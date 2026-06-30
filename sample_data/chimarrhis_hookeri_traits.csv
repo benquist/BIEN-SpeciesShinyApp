@@ -1,0 +1,45 @@
+"scrubbed_species_binomial","trait_name","trait_value","unit","method","latitude","longitude","elevation_m","url_source","project_pi","project_pi_contact","access","id"
+"Chimarrhis hookeri","stem wood density","0.71","g.cm-3",NA,NA,NA,NA,"http://datadryad.org/resource/doi:10.5061/dryad.234","Lopez-Gonzalez G","G.Lopez-Gonzalez@leeds.ac.uk","public",3190747
+"Chimarrhis hookeri","whole plant woodiness","woody",NA,NA,NA,NA,NA,"http://datadryad.org/resource/doi:10.5061/dryad.63q27.2","Zanne AE","aezanne@gmail.com","public",3957779
+"Chimarrhis hookeri","stem wood density","0.71","g.cm-3","oven dry mass/fresh volume;data compilation",NA,NA,NA,"http://datadryad.org/repo/handle/10255/dryad.235"," Zanne, A.E., Lopez-Gonzalez, G., Coomes, D.A., Ilic, J., Jansen, S., Lewis, S.L., Miller, R.B., Swenson, N.G., Wiemann, M.C., and Chave, J","G.Lopez-Gonzalez@leeds.ac.uk","public",4408207
+"Chimarrhis hookeri","whole plant growth form","Tree",NA,"Species with multiple growth form classifications were assigned the growth form classification agreed upon by the majority (>2/3) of sources. Species with ambiguous or otherwise not interpretable growth form assignments were excluded from the final dataset but are made available with the original data.",NA,NA,NA,"http://onlinelibrary.wiley.com/doi/10.1002/ecy.1569/abstract","Engemann, K","engemann@bios.au.dk","public",4522112
+"Chimarrhis hookeri","whole plant growth form diversity","Shrub_Tree",NA,"Species with multiple growth form classifications were assigned the growth form classification agreed upon by the majority (>2/3) of sources. Species with ambiguous or otherwise not interpretable growth form assignments were excluded from the final dataset but are made available with the original data.",NA,NA,NA,"http://onlinelibrary.wiley.com/doi/10.1002/ecy.1569/abstract","Engemann, K","engemann@bios.au.dk","public",4522113
+"Chimarrhis hookeri","diameter at breast height (1.3 m)","20","cm",NA,-3.95,-73.4167,NA,NA,"James S. MIller",NA,"public",33680
+"Chimarrhis hookeri","diameter at breast height (1.3 m)","187","cm",NA,-3.23333,-72.9,NA,NA,"Oliver Phillips","o.phillips@leeds.ac.uk","public",74210
+"Chimarrhis hookeri","diameter at breast height (1.3 m)","187","cm",NA,-3.23333,-72.9,NA,NA,"Oliver Phillips","o.phillips@leeds.ac.uk","public",74237
+"Chimarrhis hookeri","diameter at breast height (1.3 m)","38","cm",NA,-12.8333,-69.2833,NA,NA,"James S. MIller",NA,"public",235670
+"Chimarrhis hookeri","diameter at breast height (1.3 m)","2.5","cm",NA,-3.43333,-72.85,NA,NA,"James S. MIller",NA,"public",371043
+"Chimarrhis hookeri","diameter at breast height (1.3 m)","382","cm",NA,-3.43333,-72.85,NA,NA,"Oliver Phillips","o.phillips@leeds.ac.uk","public",398267
+"Chimarrhis hookeri","diameter at breast height (1.3 m)","382","cm",NA,-3.43333,-72.85,NA,NA,"Oliver Phillips","o.phillips@leeds.ac.uk","public",398268
+"Chimarrhis hookeri","diameter at breast height (1.3 m)","502","cm",NA,-3.43333,-72.85,NA,NA,"Oliver Phillips","o.phillips@leeds.ac.uk","public",506172
+"Chimarrhis hookeri","diameter at breast height (1.3 m)","502","cm",NA,-3.43333,-72.85,NA,NA,"Oliver Phillips","o.phillips@leeds.ac.uk","public",506173
+"Chimarrhis hookeri","diameter at breast height (1.3 m)","38","cm",NA,-3.51667,-73.0667,NA,NA,"James S. MIller",NA,"public",734921
+"Chimarrhis hookeri","diameter at breast height (1.3 m)","7","cm",NA,-3.95,-73.4167,NA,NA,"James S. MIller",NA,"public",1247951
+"Chimarrhis hookeri","diameter at breast height (1.3 m)","3","cm",NA,-3.95,-73.4167,NA,NA,"James S. MIller",NA,"public",1247952
+"Chimarrhis hookeri","diameter at breast height (1.3 m)","5","cm",NA,-3.95,-73.4167,NA,NA,"James S. MIller",NA,"public",1247953
+"Chimarrhis hookeri","diameter at breast height (1.3 m)","175","cm",NA,-3.43333,-72.85,NA,NA,"Oliver Phillips","o.phillips@leeds.ac.uk","public",1384506
+"Chimarrhis hookeri","diameter at breast height (1.3 m)","175","cm",NA,-3.43333,-72.85,NA,NA,"Oliver Phillips","o.phillips@leeds.ac.uk","public",1384507
+"Chimarrhis hookeri","diameter at breast height (1.3 m)","507","cm",NA,-12.83,-69.3,NA,NA,"Oliver Phillips","o.phillips@leeds.ac.uk","public",1546182
+"Chimarrhis hookeri","diameter at breast height (1.3 m)","507","cm",NA,-12.83,-69.3,NA,NA,"Oliver Phillips","o.phillips@leeds.ac.uk","public",1546183
+"Chimarrhis hookeri","diameter at breast height (1.3 m)","363","cm",NA,-12.83,-69.3,NA,NA,"Oliver Phillips","o.phillips@leeds.ac.uk","public",1640484
+"Chimarrhis hookeri","diameter at breast height (1.3 m)","363","cm",NA,-12.83,-69.3,NA,NA,"Oliver Phillips","o.phillips@leeds.ac.uk","public",1640485
+"Chimarrhis hookeri","whole plant growth form","tree",NA,NA,-3.95,-73.4167,NA,NA,"James S. MIller",NA,"public",1745790
+"Chimarrhis hookeri","whole plant growth form","tree",NA,NA,-3.23333,-72.9,NA,NA,"Oliver Phillips","o.phillips@leeds.ac.uk","public",1755812
+"Chimarrhis hookeri","whole plant growth form","tree",NA,NA,-3.23333,-72.9,NA,NA,"Oliver Phillips","o.phillips@leeds.ac.uk","public",1755838
+"Chimarrhis hookeri","whole plant growth form","tree",NA,NA,-12.8333,-69.2833,NA,NA,"James S. MIller",NA,"public",1776667
+"Chimarrhis hookeri","whole plant growth form","tree",NA,NA,-3.43333,-72.85,NA,NA,"James S. MIller",NA,"public",1795211
+"Chimarrhis hookeri","whole plant growth form","tree",NA,NA,-3.43333,-72.85,NA,NA,"Oliver Phillips","o.phillips@leeds.ac.uk","public",1799744
+"Chimarrhis hookeri","whole plant growth form","tree",NA,NA,-3.43333,-72.85,NA,NA,"Oliver Phillips","o.phillips@leeds.ac.uk","public",1799745
+"Chimarrhis hookeri","whole plant growth form","tree",NA,NA,-3.43333,-72.85,NA,NA,"Oliver Phillips","o.phillips@leeds.ac.uk","public",1814298
+"Chimarrhis hookeri","whole plant growth form","tree",NA,NA,-3.43333,-72.85,NA,NA,"Oliver Phillips","o.phillips@leeds.ac.uk","public",1814299
+"Chimarrhis hookeri","whole plant growth form","tree",NA,NA,-3.51667,-73.0667,NA,NA,"James S. MIller",NA,"public",1844103
+"Chimarrhis hookeri","whole plant growth form","tree",NA,NA,-3.95,-73.4167,NA,NA,"James S. MIller",NA,"public",1913502
+"Chimarrhis hookeri","whole plant growth form","tree",NA,NA,-3.95,-73.4167,NA,NA,"James S. MIller",NA,"public",1913503
+"Chimarrhis hookeri","whole plant growth form","tree",NA,NA,-3.95,-73.4167,NA,NA,"James S. MIller",NA,"public",1913504
+"Chimarrhis hookeri","whole plant growth form","tree",NA,NA,-3.43333,-72.85,NA,NA,"Oliver Phillips","o.phillips@leeds.ac.uk","public",1933248
+"Chimarrhis hookeri","whole plant growth form","tree",NA,NA,-3.43333,-72.85,NA,NA,"Oliver Phillips","o.phillips@leeds.ac.uk","public",1933249
+"Chimarrhis hookeri","whole plant growth form","tree",NA,NA,-12.83,-69.3,NA,NA,"Oliver Phillips","o.phillips@leeds.ac.uk","public",1955554
+"Chimarrhis hookeri","whole plant growth form","tree",NA,NA,-12.83,-69.3,NA,NA,"Oliver Phillips","o.phillips@leeds.ac.uk","public",1955555
+"Chimarrhis hookeri","whole plant growth form","tree",NA,NA,-12.83,-69.3,NA,NA,"Oliver Phillips","o.phillips@leeds.ac.uk","public",1968077
+"Chimarrhis hookeri","whole plant growth form","tree",NA,NA,-12.83,-69.3,NA,NA,"Oliver Phillips","o.phillips@leeds.ac.uk","public",1968078
+"Chimarrhis hookeri","diameter at breast height (1.3 m)","10.1","cm",NA,-10.40999508,-75.32989584,NA,NA,"VG-YAN-3",NA,"public",16449399

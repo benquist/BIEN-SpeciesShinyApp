@@ -2,7 +2,19 @@
 
 Tracks prompts that created or changed work under this project folder.
 
-## 2026-05-10 — Issue 14 follow-up fixes (F1–F9)
+## 2026-05-30 — "All records" vs Standard counterintuitive display diagnosis (Quassia indica)
+
+**Prompt:** Multi-agent diagnosis: ecology-user + telford-statistical-ecology + coder — why does Standard show more globally distributed records than Custom "All records" for an Old World species?
+
+**Agents invoked:** @m (supervisor), ecology-user, telford-statistical-ecology, coder.
+
+**Diagnosis:** Working-as-designed — no code bug. Standard applies `AND (is_introduced=0 OR is_introduced IS NULL)`, excising NSR-confirmed introduced Americas records (is_introduced=1), leaving pool dominated by Old World IS-NULL records. "All records" includes the large Americas-introduced pool; `ORDER BY random() LIMIT 1000` then samples proportionally from an Americas-heavy pool. "All records" is the least *filter*-restrictive option, not the least *geographically*-restrictive option. BIEN Americas coverage bias + differential NSR evaluation of introduced status is the root cause.
+
+**Fixes applied to app.R:**
+- Added `conditionalPanel` amber warning under `input.origin_radio === 'all'` (Custom profile only) explaining that BIEN's Americas-concentrated pool means "All records" may appear more geographically restricted than Standard for Old World species with NSR-evaluated Americas introductions.
+- Corrected Standard "Limitations" bullet (line ~2999): was "Standard may return only the invaded Americas range" (backwards) → corrected to accurately state Standard excludes is_introduced=1 Americas records so the sample skews toward Old World IS-NULL records; Old World IS-NULL records are not confirmed native.
+
+
 
 **Prompt:** "Actually, all of these recommendations look important. Please proceed in making these changes" (after multi-agent re-review of Issue 14 fix surfaced 4 CRITICAL + 7 HIGH/WARNING items).
 
