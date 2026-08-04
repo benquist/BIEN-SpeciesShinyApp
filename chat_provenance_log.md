@@ -2,6 +2,16 @@
 
 Tracks prompts that created or changed work under this project folder.
 
+## 2026-08-04 — GitHub release and shinyapps.io deployment
+
+**Prompt:** "please commit and deploy"
+
+**Release:** Committed the validated autocomplete, profile, query-state, cache, and reproducibility repairs as `65fead4` and pushed `main` to `https://github.com/benquist/BIEN-SpeciesShinyApp`.
+
+**Deployment:** Deployed shinyapps.io bundle `12365398` to `https://benquist.shinyapps.io/bien-species-shinyapp/` using the existing `benquist` application configuration.
+
+**Live validation:** Confirmed the production app starts, renders all three data profiles, and returns 20 suggestions for `Annona m`, including *Annona montana*, without underscores.
+
 ## 2026-08-04 — Autocomplete, quality profiles, and occurrence-state repairs
 
 **Prompt:** "Thank you. Please lets go ahead with making these changes."
