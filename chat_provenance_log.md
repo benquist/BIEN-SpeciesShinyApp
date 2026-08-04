@@ -2,6 +2,21 @@
 
 Tracks prompts that created or changed work under this project folder.
 
+## 2026-08-04 — Autocomplete, quality profiles, and occurrence-state repairs
+
+**Prompt:** "Thank you. Please lets go ahead with making these changes."
+
+**Agents invoked:** @m, biodiversity-informatics-checker, coder, design-atelier, EcoInterface, ecology-user, code-verifier.
+
+**Fixes applied:**
+- Restored useful species autocomplete with a debounced, bounded BIEN taxonomy prefix query while preserving free-text entry; normalized underscores to spaces in local suggestions, pasted names, URLs, and submitted queries.
+- Corrected Standard, Strict, and Custom profile identity and selected-state styling. Standard retains disclosed fallback; Strict and Custom never widen. Strict now requires `is_introduced = 0`, `is_cultivated_observation = 0`, excludes locations explicitly marked cultivated, and requires geovalid coordinates.
+- Added complete cache identity for profile and strict-status semantics, bypassed caches on Retry, and stopped caching timeout, connection, or indeterminate backend failures.
+- Classified occurrence outcomes as success, widened success, timeout, backend error, no records, filtered empty, or records without usable coordinates; persistent banners and notifications now avoid interpreting backend failures as absence.
+- Replaced the overstated SDM-safe label with factual screening provenance and corrected Standard/Strict cultivation disclosures.
+
+**Validation:** Focused regression suite passed; app parsed and `git diff --check` passed; live BIEN smoke queries for *Annona montana* returned 500/500 mappable Standard records and 120/120 mappable Strict records; browser automation verified `Annona m` returns 14 BIEN suggestions including *Annona montana* without underscores, all three profiles are selectable with visible state, and a rendered Strict query displayed 120 records with 106 mapped and no false empty-map warning.
+
 ## 2026-05-30 — "All records" vs Standard counterintuitive display diagnosis (Quassia indica)
 
 **Prompt:** Multi-agent diagnosis: ecology-user + telford-statistical-ecology + coder — why does Standard show more globally distributed records than Custom "All records" for an Old World species?

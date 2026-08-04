@@ -46,6 +46,9 @@ safe_bien_retry <- function(call_fn, timeout_sec = 90, attempts = 1, sleep_sec =
       }
       Sys.sleep(wait_sec)
     }
+    if (is.null(last)) {
+      last <- simpleError("BIEN query returned no result object.")
+    }
   }
   list(
     result = last,
@@ -217,6 +220,7 @@ fetch_species_photo <- function(species_name, timeout_sec = 8) {
 
 # Normalize user-entered species strings so BIEN queries are robust to case.
 normalize_species_name <- function(x) {
+  x <- gsub("_+", " ", as.character(x))
   x <- str_squish(x)
   if (!nzchar(x)) {
     return(x)
@@ -431,6 +435,71 @@ load_accepted_species_suggestions <- function(timeout_sec = 60) {
   vals
 }
 
+load_species_suggestions_by_prefix <- function(prefix, timeout_sec = 5, limit = 100) {
+  prefix <- normalize_species_name(prefix)
+  if (nchar(prefix) < 2) return(character(0))
+
+  sql <- paste0(
+    "SELECT DISTINCT scrubbed_species_binomial AS taxon ",
+    "FROM bien_taxonomy ",
+    "WHERE scrubbed_species_binomial LIKE ", sql_quote_literal(paste0(prefix, "%")), " ",
+    "AND scrubbed_species_binomial IS NOT NULL ",
+    "AND scrubbed_species_binomial <> '' ",
+    "ORDER BY scrubbed_species_binomial ",
+    "LIMIT ", as.integer(limit), ";"
+  )
+  out <- safe_bien_call(BIEN:::.BIEN_sql(sql, fetch.query = FALSE), timeout_sec = timeout_sec)
+  if (inherits(out, "error") || !is.data.frame(out) || !"taxon" %in% names(out)) return(character(0))
+
+  vals <- unique(vapply(as.character(out$taxon), normalize_species_name, character(1)))
+  vals[!is.na(vals) & nzchar(vals)]
+}
+
+resolve_sample_data_dir <- function() {
+  candidates <- c(
+    file.path(getwd(), "sample_data"),
+    file.path(getwd(), "BIEN-SpeciesShinyApp", "sample_data")
+  )
+
+  for (data_dir in candidates) {
+    if (dir.exists(data_dir)) {
+      return(data_dir)
+    }
+  }
+
+  file.path(getwd(), "sample_data")
+}
+
+load_startup_species_suggestions <- function(timeout_sec = 5) {
+  data_dir <- resolve_sample_data_dir()
+  if (dir.exists(data_dir)) {
+    occ_files <- list.files(data_dir, pattern = "_occurrences\\.csv$", full.names = FALSE)
+    if (length(occ_files) > 0) {
+      suggestions <- vapply(
+        occ_files,
+        function(file_name) {
+          normalize_species_name(sub("_occurrences\\.csv$", "", file_name))
+        },
+        character(1)
+      )
+      suggestions <- suggestions[nzchar(suggestions)]
+      suggestions <- unique(suggestions)
+      if (length(suggestions) > 0) {
+        return(suggestions)
+      }
+    }
+  }
+
+  # Fall back to a short BIEN lookup only if the backend is responsive; otherwise
+  # return the startup species so the app still loads quickly.
+  out <- load_accepted_species_suggestions(timeout_sec = timeout_sec)
+  if (length(out) > 0) {
+    return(out)
+  }
+
+  STARTUP_SPECIES
+}
+
 sql_quote_literal <- function(x) {
   x <- as.character(x)
   x <- gsub("'", "''", x, fixed = TRUE)
@@ -503,12 +572,18 @@ query_occurrence_randomized <- function(species_name, cultivated = FALSE, native
 
   # F4 (Issue 14 follow-up): close the parallel cultivated IS NULL trap.
   # When the user explicitly asks to exclude cultivated AND opts in to strict-wild,
-  # require is_cultivated = 0 (drop NULL/unevaluated). Otherwise fall back to the
-  # default BIEN cultivated check (which permits NULLs).
+  # require an explicit non-cultivated observation flag (drop NULL/unevaluated)
+  # and reject locations BIEN marks as cultivated. Otherwise use the default BIEN
+  # cultivated check, which permits unevaluated observation status.
   cult_clause <- if (isTRUE(strict_wild_no_unknown) && !isTRUE(cultivated)) {
-    "AND is_cultivated = 0 "
+    "AND is_cultivated_observation = 0 AND (is_location_cultivated IS NULL OR is_location_cultivated = FALSE) "
   } else {
     cultivated_$query
+  }
+  cultivation_select <- if (nzchar(cultivated_$select)) {
+    cultivated_$select
+  } else {
+    ",is_cultivated_observation,is_cultivated_in_region,is_location_cultivated"
   }
 
   query <- paste(
@@ -523,7 +598,7 @@ query_occurrence_randomized <- function(species_name, cultivated = FALSE, native
     "COALESCE(CASE WHEN longitude BETWEEN -180 AND 180 THEN longitude ELSE NULL END, ST_X(geom::geometry)) AS longitude,",
     "date_collected,",
     "datasource,dataset,dataowner,custodial_institution_codes,collection_code,view_full_occurrence_individual.datasource_id",
-    collection_$select, cultivated_$select, newworld_$select,
+    collection_$select, cultivation_select, newworld_$select,
     observation_$select, geovalid_$select,
     "FROM view_full_occurrence_individual",
     "WHERE scrubbed_species_binomial in (", paste(sql_quote_literal(species_name), collapse = ", "), ")",
@@ -552,6 +627,8 @@ resolve_filter_profile <- function(input) {
   if (identical(profile, "standard")) {
     # Sensible ecological defaults + auto-fallback ladder enabled.
     return(list(
+      profile = "standard",
+      allow_fallback = TRUE,
       use_default_profile = FALSE,
       use_introduced_filter = TRUE,
       natives_only = TRUE,
@@ -570,13 +647,15 @@ resolve_filter_profile <- function(input) {
     # geovalid required, no fallback ladder. Empty map means no records pass.
     # strict_wild_no_unknown is opt-in via the sidebar checkbox under strict.
     return(list(
+      profile = "strict",
+      allow_fallback = FALSE,
       use_default_profile = TRUE,
       use_introduced_filter = TRUE,
       natives_only = TRUE,
       strict_native_no_unknown = TRUE,
       use_cultivated_filter = TRUE,
       include_cultivated = FALSE,
-      strict_wild_no_unknown = if (is.null(input$strict_wild_no_unknown)) FALSE else isTRUE(input$strict_wild_no_unknown),
+      strict_wild_no_unknown = TRUE,
       only_geovalid = TRUE,
       exclude_human_observation_records = FALSE,
       only_plot_observations = FALSE
@@ -589,6 +668,8 @@ resolve_filter_profile <- function(input) {
   cultivation <- if (is.null(input$cultivation_radio)) "wild_only"         else input$cultivation_radio
 
   list(
+    profile                           = "custom",
+    allow_fallback                    = FALSE,
     use_default_profile               = FALSE,
     use_introduced_filter             = !identical(origin, "all"),
     natives_only                      = identical(origin, "native_or_unknown") || identical(origin, "native_only"),
@@ -637,7 +718,7 @@ query_occurrence_with_fallback <- function(species_name, input, occ_limit, occ_p
   # only.geovalid constraints. The user sees strict results or an empty map and
   # an explicit banner — never India/Australia/Mexico records mislabeled as the
   # 'conservative' interpretation of an Old-World native (e.g. Markhamia lutea).
-  if (isTRUE(filter_cfg$use_default_profile)) {
+  if (!isTRUE(filter_cfg$allow_fallback)) {
     # F5 (Issue 14 follow-up): when strict-only is on, no relaxation ladder runs;
     # cap the strict plan at 500 rows so we stay below the ORDER BY random()
     # threshold and avoid 60–610s backend timeouts on widespread species
@@ -894,6 +975,8 @@ query_occurrence_with_fallback <- function(species_name, input, occ_limit, occ_p
     "backend_connection_error"
   } else if (is_bien_timeout_error(notes)) {
     "backend_timeout_error"
+  } else if (any(grepl("occ_error:", notes, fixed = TRUE))) {
+    "backend_query_error"
   } else {
     # "no_bien_records": all plans exhausted with zero rows (species genuinely absent
     # from BIEN, unresolved synonym, or homonym requiring authorship disambiguation).
@@ -908,6 +991,20 @@ query_occurrence_with_fallback <- function(species_name, input, occ_limit, occ_p
     strict_wild_no_unknown   = isTRUE(strict_wild_no_unknown) && isFALSE(include_cultivated),
     native_filter_mode       = if (isTRUE(strict_native_no_unknown) && isTRUE(natives_only)) "native_only" else if (isTRUE(natives_only)) "native_or_unknown" else "all_records"
   )
+}
+
+classify_occurrence_result <- function(strategy, profile, occurrence_n, mappable_n) {
+  if (identical(strategy, "backend_timeout_error")) return("timeout")
+  if (strategy %in% c("backend_connection_error", "backend_query_error")) return("backend_error")
+  if (occurrence_n > 0 && mappable_n == 0) return("no_coordinates")
+  if (occurrence_n == 0) {
+    return(if (profile %in% c("strict", "custom")) "filtered_empty" else "no_records")
+  }
+  if (strategy %in% c(
+    "zero_result_native_widened", "fallback_relaxed_native", "fallback_relaxed_geo",
+    "fallback_coord_bearing", "fallback_allow_centroids"
+  )) return("success_fallback")
+  "success"
 }
 
 
@@ -1204,7 +1301,7 @@ summarize_coordinate_quality <- function(occ_info) {
 count_occurrence_records <- function(species_name, cultivated = FALSE, natives_only = TRUE, only_geovalid = TRUE, timeout_sec = 30, strict_no_unknown = FALSE, strict_wild_no_unknown = FALSE) {
   count_res <- safe_bien_call({
     cult_clause <- if (isTRUE(strict_wild_no_unknown) && !isTRUE(cultivated)) {
-      "AND is_cultivated = 0 "
+      "AND is_cultivated_observation = 0 AND (is_location_cultivated IS NULL OR is_location_cultivated = FALSE) "
     } else {
       BIEN:::.cultivated_check(cultivated)$query
     }
@@ -1247,7 +1344,7 @@ count_occurrence_records <- function(species_name, cultivated = FALSE, natives_o
 # plots/surveys, trait-linked rows, or other provenance classes.
 count_occurrence_source_mix <- function(species_name, cultivated = FALSE, natives_only = TRUE, only_geovalid = TRUE, timeout_sec = 30, strict_no_unknown = FALSE, strict_wild_no_unknown = FALSE) {
   cult_clause <- if (isTRUE(strict_wild_no_unknown) && !isTRUE(cultivated)) {
-    "AND is_cultivated = 0 "
+    "AND is_cultivated_observation = 0 AND (is_location_cultivated IS NULL OR is_location_cultivated = FALSE) "
   } else {
     BIEN:::.cultivated_check(cultivated)$query
   }
@@ -1891,7 +1988,7 @@ STARTUP_CACHE_KEY <- paste0("startup_preloaded_", STARTUP_SPECIES_SLUG)
 # Build the preloaded startup result once at app launch (global scope) so every
 # session inherits it immediately without re-reading CSVs or the range shapefile.
 build_preloaded_startup_result <- function() {
-  data_dir <- file.path(getwd(), "sample_data")
+  data_dir <- resolve_sample_data_dir()
   occ_file <- file.path(data_dir, paste0(STARTUP_SPECIES_SLUG, "_occurrences.csv"))
   trait_file <- file.path(data_dir, paste0(STARTUP_SPECIES_SLUG, "_traits.csv"))
   range_file <- file.path(data_dir, paste0(STARTUP_SPECIES_SLUG, "_ranges.csv"))
@@ -1959,7 +2056,9 @@ startup_preloaded_result <- build_preloaded_startup_result()
 
 # Preload the accepted-species autocomplete list once at app launch (global scope)
 # so every new session gets instant autocomplete without a 60-sec per-session block.
-startup_species_suggestions <- load_accepted_species_suggestions(timeout_sec = 60)
+# Prefer a local sample-data bootstrap because the BIEN backend can be slow or
+# unavailable during startup on shinyapps.io.
+startup_species_suggestions <- load_startup_species_suggestions(timeout_sec = 5)
 if (length(startup_species_suggestions) == 0) {
   startup_species_suggestions <- STARTUP_SPECIES
 }
@@ -2793,7 +2892,7 @@ ui <- fluidPage(
         background: #fafafa;
         transition: border-color 0.12s, background 0.12s;
       }
-      #data_profile .radio input[type='radio']:checked + label {
+      #data_profile .radio label:has(input[type='radio']:checked) {
         border-color: #2c7a34;
         background: #f0faf0;
         border-left: 4px solid #2c7a34;
@@ -2801,7 +2900,11 @@ ui <- fluidPage(
         color: #1b4d22;
       }
       #data_profile .radio label:hover { border-color: #9ca3af; background: #f3f4f6; }
-      #data_profile .radio input[type='radio'] { position: absolute; opacity: 0; width: 0; height: 0; }
+      #data_profile .radio label:has(input[type='radio']:focus-visible) {
+        outline: 2px solid #2563eb;
+        outline-offset: 2px;
+      }
+      #data_profile .radio input[type='radio'] { position: absolute; opacity: 0; width: 1px; height: 1px; }
 
       /* ── Onboarding banner ───────────────────────────────────────────── */
       .bien-onboard {
@@ -2983,7 +3086,7 @@ ui <- fluidPage(
             create = TRUE,
             createOnBlur = TRUE,
             maxOptions = 2000,
-            placeholder = "Start typing accepted BIEN species names..."
+            placeholder = "Start typing a BIEN species name..."
           )
         )
       ),
@@ -3019,6 +3122,7 @@ ui <- fluidPage(
       ),
       uiOutput("retry_bien_ui"),
       tags$script(HTML("$(document).on('keydown', '#species-selectized', function(e) { if (e.key === 'Enter') { $('#run_query').click(); return false; } });")),
+      tags$script(HTML("$(document).on('input', '#species-selectized', function() { Shiny.setInputValue('species_prefix', this.value, {priority: 'event'}); });")),
       tags$script(HTML(
         "(function() {
           function bindFallbackTip(el) {
@@ -3104,7 +3208,7 @@ ui <- fluidPage(
         label = NULL,
         choiceNames = list(
           HTML("<span><strong>Standard</strong> &mdash; filters widen if needed</span>"),
-          HTML("<span><strong>Strict</strong> &mdash; no widening &nbsp;<span style='color:#2c7a34;font-size:0.9em;'>&#10004; SDM-safe</span></span>"),
+          HTML("<span><strong>Strict</strong> &mdash; explicit status screening, no widening</span>"),
           HTML("<span><strong>Custom</strong> &mdash; manual control</span>")
         ),
         choiceValues = list("standard", "strict", "custom"),
@@ -3124,7 +3228,7 @@ ui <- fluidPage(
           tags$ul(
             style = "color:#6b7280;margin:4px 0 0 0;padding-left:16px;line-height:1.6;",
             tags$li(tags$strong("NSR-unevaluated \u2260 confirmed native."), " Records with is_introduced\u2009=\u2009NULL have not been assessed by the BIEN Native Species Resolver (NSR). They are not confirmed non-introduced and may represent introduced populations."),
-            tags$li(tags$strong("Cultivation-unassessed records are included."), " The default filter passes is_cultivated\u2009IS\u2009NULL \u2014 these are not confirmed wild occurrences."),
+            tags$li(tags$strong("Cultivation-unassessed records are included."), " Standard permits is_cultivated_observation\u2009IS\u2009NULL when the location is not marked cultivated. These are not confirmed wild occurrences."),
             tags$li(tags$strong("Filters widen step-by-step via a relaxation ladder."), " At maximum relaxation, confirmed-invasive records may be included. The amber banner states which tier was reached."),
             tags$li(tags$strong("BIEN covers the Western Hemisphere only."), " Standard mode excludes NSR-confirmed introduced (is_introduced\u2009=\u20091) records. For Old World species, this removes many Americas-introduced records, so the random sample often skews toward Old World occurrences with unevaluated status (IS\u2009NULL). Those records are not confirmed native\u2014they have simply not been assessed by NSR. Conversely, 'All records' in Custom mode includes the large pool of Americas-introduced records and may appear \u2018more restricted\u2019 geographically due to BIEN's Americas-heavy collection density.")
           )
@@ -3134,12 +3238,12 @@ ui <- fluidPage(
         condition = "input.data_profile === 'strict'",
         tags$div(
           style = "font-size:0.87em;color:#444;background:#fff8e1;border-left:3px solid #e6a817;padding:5px 8px;margin:0 0 4px 0;border-radius:2px;",
-          tags$span(style = "color:#2c7a34;font-weight:700;", "\u2714 Preferred profile for SDM calibration."),
+          tags$span(style = "color:#2c7a34;font-weight:700;", "Strict screened subset."),
           tags$br(),
-          tags$strong("NSR-confirmed non-introduced; confirmed wild; geovalid. 500-record cap."),
+          tags$strong("NSR-confirmed non-introduced; observation explicitly non-cultivated; locations marked cultivated excluded; geovalid. 500-record cap."),
           tags$br(),
           tags$span(style = "color:#666;",
-            "No filter widening \u2014 empty map means no records pass these criteria. Empty result is a valid, informative outcome.")
+            "No filter widening. A zero-result message distinguishes filtered records, missing coordinates, and BIEN service errors.")
         ),
         tags$details(
           style = "font-size:0.82em;margin:0 0 6px 0;",
@@ -3159,7 +3263,7 @@ ui <- fluidPage(
           style = "font-size:0.87em;color:#444;background:#f0f4ff;border-left:3px solid #4a6fd4;padding:5px 8px;margin:0 0 6px 0;border-radius:2px;",
           "Set your own introduced-status, cultivation-status, and coordinate-precision filters manually.",
           tags$br(),
-          tags$span(style="color:#888;", "Fallback does not occur in Custom mode \u2014 no-record queries return empty without a banner.")
+          tags$span(style="color:#888;", "Fallback does not occur in Custom mode. A persistent result banner explains empty or unmappable results.")
         )
       ),
 
@@ -3206,7 +3310,7 @@ ui <- fluidPage(
           "Cultivation status",
           tags$span(
             class = "bien-inline-tip", role = "button", tabindex = "0",
-            "data-bien-tip" = "Controls whether cultivated or managed plantings are included. 'Wild records only' excludes ornamental and managed plants so outputs emphasize wild occurrences. 'All records' retains everything regardless of cultivation status.",
+            "data-bien-tip" = "Controls cultivation screening. 'Wild records only' excludes records explicitly marked cultivated, while records with unassessed cultivation status may remain. 'All records' retains every cultivation status.",
             HTML("&#9432;")
           )
         ),
@@ -3215,7 +3319,7 @@ ui <- fluidPage(
           label = NULL,
           choices = c(
             "Wild or cultivation-unassessed"         = "wild_only",
-            "Include confirmed cultivated records"    = "include_cultivated",
+            "Include all cultivation statuses"        = "include_cultivated",
             "All records (no filter)"                = "any"
           ),
           selected = "wild_only"
@@ -3231,18 +3335,18 @@ ui <- fluidPage(
           value = TRUE)
       ),
       conditionalPanel(
-        condition = "(input.data_profile == 'strict') || (input.data_profile == 'custom' && (input.origin_radio == 'native_only' || input.origin_radio == 'native_or_unknown'))",
+        condition = "input.data_profile == 'custom' && (input.origin_radio == 'native_only' || input.origin_radio == 'native_or_unknown')",
         checkboxInput("strict_native_no_unknown",
                       "Strict native (exclude unevaluated establishment)",
                       value = FALSE),
         helpText("Excludes records where BIEN has not evaluated establishment status (is_introduced IS NULL). Trades recall for tighter contamination control. NSR coverage is uneven across regions and taxa.")
       ),
       conditionalPanel(
-        condition = "(input.data_profile == 'strict') || (input.data_profile == 'custom' && input.cultivation_radio == 'wild_only')",
+        condition = "input.data_profile == 'custom' && input.cultivation_radio == 'wild_only'",
         checkboxInput("strict_wild_no_unknown",
                       "Strict wild (exclude unevaluated cultivation)",
                       value = FALSE),
-        helpText("Excludes records where BIEN has not evaluated cultivation status (is_cultivated IS NULL). Closes the parallel NULL-permissiveness on the cultivation axis.")
+        helpText("Requires is_cultivated_observation = 0 and excludes locations BIEN explicitly marks as cultivated. Unknown location status may remain.")
       ),
       HTML('</div></details>'),
       HTML('<details class="bien-accordion"><summary class="bien-accordion-summary">&#9656;&thinsp;Map &amp; Sampling</summary><div class="bien-accordion-body">'),
@@ -3301,6 +3405,21 @@ ui <- fluidPage(
             var btn = document.getElementById('copy_occ_r_code_btn');
             if (btn) { btn.textContent = 'Copy unavailable'; }
           });
+        });
+      ")),
+      tags$script(HTML("
+        Shiny.addCustomMessageHandler('bien_species_suggestions', function(names) {
+          var input = document.getElementById('species');
+          if (!input || !input.selectize) return;
+          if (!Array.isArray(names)) names = Object.values(names || {});
+          var query = input.selectize.$control_input.val();
+          names.forEach(function(name) {
+            input.selectize.addOption({ value: name, label: name });
+          });
+          input.selectize.setTextboxValue(query);
+          input.selectize.lastQuery = null;
+          input.selectize.refreshOptions(false);
+          input.selectize.open();
         });
       ")),
       uiOutput("taxon_match_banner_ui"),
@@ -3409,7 +3528,7 @@ ui <- fluidPage(
             tags$p(style = "font-size:0.93em;color:#555;max-width:900px;",
               tags$strong("Try it: "),
               "Type ", tags$code("Pinus ponderosa"), " in the Species name box on the left,",
-              " leave filters at their defaults (native, non-cultivated, geovalid),",
+              " leave filters at their defaults (exclude records explicitly marked introduced or cultivated, permit unassessed status, require geovalid coordinates),",
               " and click ", tags$strong("Query BIEN"), ".",
               " Then explore the Occurrence Map, Observations, and Traits tabs."
             )
@@ -3780,6 +3899,7 @@ server <- function(input, output, session) {
 
   last_lucky_species <- reactiveVal(NULL)
   species_select_choices <- reactiveVal(STARTUP_SPECIES)
+  species_prefix_cache <- new.env(parent = emptyenv())
 
   update_species_select_input <- function(selected_species, choices = NULL) {
     selected_species <- normalize_species_name(selected_species)
@@ -3800,9 +3920,10 @@ server <- function(input, output, session) {
       selected = selected_species,
       server = TRUE,
       options = list(
-        create = FALSE,
+        create = TRUE,
+        createOnBlur = TRUE,
         maxOptions = 2000,
-        placeholder = "Start typing accepted BIEN species names..."
+        placeholder = "Start typing a BIEN species name..."
       )
     )
   }
@@ -3830,6 +3951,32 @@ server <- function(input, output, session) {
                         selected = utils::URLdecode(tab_from_url))
     }
   }, once = TRUE)
+
+  observeEvent(input$species, {
+    selected_species <- as.character(input$species)
+    normalized_species <- normalize_species_name(selected_species)
+    if (nzchar(selected_species) && !identical(selected_species, normalized_species)) {
+      update_species_select_input(normalized_species)
+    }
+  }, ignoreInit = TRUE)
+
+  species_prefix <- debounce(reactive(input$species_prefix), 350)
+  observeEvent(species_prefix(), {
+    prefix <- normalize_species_name(species_prefix())
+    if (nchar(prefix) < 2) return(NULL)
+
+    cache_key <- tolower(prefix)
+    suggestions <- if (exists(cache_key, envir = species_prefix_cache, inherits = FALSE)) {
+      get(cache_key, envir = species_prefix_cache, inherits = FALSE)
+    } else {
+      found <- load_species_suggestions_by_prefix(prefix, timeout_sec = 5, limit = 100)
+      if (length(found) > 0) assign(cache_key, found, envir = species_prefix_cache)
+      found
+    }
+    if (length(suggestions) > 0) {
+      session$sendCustomMessage("bien_species_suggestions", unname(suggestions))
+    }
+  }, ignoreInit = FALSE)
 
   # Keep the URL bar in sync with the active species + tab so users can copy/
   # share a link that restores the same view.  Uses mode = "replace" to avoid
@@ -3866,7 +4013,7 @@ server <- function(input, output, session) {
       tags$div(
         style = "background:#e8f5e9;border:1px solid #b7dfb9;color:#1b5e20;padding:8px 10px;border-radius:6px;margin:10px 0 0 0;font-size:0.92em;",
         tags$strong("Default (conservative ecological view): "),
-        "Showing BIEN records where species is classified as native or introduced status is unclassified (confirmed native + unknown status — records explicitly marked introduced are excluded); cultivated records hidden; only BIEN geovalid coordinates shown; all observation-source categories retained (including field observation / citizen science); and all observation categories (plot + non-plot) retained.",
+        "Showing BIEN records not explicitly marked introduced (is_introduced = 0 or unassessed); records explicitly marked cultivated are excluded while cultivation-unassessed records may remain; only BIEN geovalid coordinates are shown; all observation-source categories are retained (including field observation / citizen science); and all observation categories (plot + non-plot) are retained.",
         tags$br(),
         "This is the app's default starting view for biodiversity screening. If BIEN finds no records under these strict settings, the summary section below the map will report whether the app had to broaden the actual query strategy."
       ),
@@ -3879,6 +4026,8 @@ server <- function(input, output, session) {
     species_for_code <- if (!is.null(res$species) && nzchar(res$species)) res$species else "Pinus ponderosa"
 
     active_cultivated <- if (isTRUE(res$use_cultivated_filter)) isTRUE(res$include_cultivated) else TRUE
+    strict_wild_no_unknown <- isTRUE(res$strict_wild_no_unknown)
+    api_cultivated <- if (strict_wild_no_unknown) TRUE else active_cultivated
     requested_natives_only <- if (isTRUE(res$use_introduced_filter)) isTRUE(res$natives_only) else FALSE
     requested_only_geovalid <- isTRUE(res$only_geovalid)
 
@@ -3886,6 +4035,7 @@ server <- function(input, output, session) {
     effective_natives_only <- switch(
       strategy,
       strict = requested_natives_only,
+      zero_result_native_widened = FALSE,
       fallback_relaxed_native = FALSE,
       fallback_relaxed_geo = FALSE,
       fallback_coord_bearing = FALSE,
@@ -3990,7 +4140,8 @@ server <- function(input, output, session) {
       "# datasource                : Primary data provider (e.g. GBIF, iDigBio, CVS)",
       "# dataset                   : Dataset within the datasource",
       "# is_introduced             : 0=native/not introduced; 1=introduced; NULL=unknown",
-      "# is_cultivated             : 1=cultivated; 0=not cultivated; NULL=unknown",
+      "# is_cultivated_observation : 1=cultivated; 0=not cultivated; NULL=unknown",
+      "# is_location_cultivated    : TRUE=cultivated location; FALSE/NULL=not marked cultivated",
       "# observation_type          : Raw BIEN observation type field",
       "# observation_category      : App heuristic category (see note above)",
       "#",
@@ -4029,8 +4180,8 @@ server <- function(input, output, session) {
              "   # exclude records where is_introduced = 1"),
       paste0("only_geovalid <- ", tolower(as.character(effective_only_geovalid)),
              "   # require BIEN coordinate validation flag"),
-      paste0("cultivated    <- ", tolower(as.character(active_cultivated)),
-             "   # include cultivated records"),
+            paste0("cultivated    <- ", tolower(as.character(api_cultivated)),
+              if (strict_wild_no_unknown) "   # fetch cultivation flags for exact Strict post-filtering" else "   # include cultivated records"),
       "",
       "# --- Step 1: Fetch occurrence records via the BIEN public API ---",
       "# BIEN_occurrence_species() is the recommended public interface.",
@@ -4072,6 +4223,22 @@ server <- function(input, output, session) {
         )
       } else {
         "# strict-native filter not applied"
+      },
+      "",
+      if (strict_wild_no_unknown) {
+        paste(
+          "# Strict cultivation filter: retain observations explicitly marked non-cultivated",
+          "# and exclude locations BIEN explicitly marks as cultivated.",
+          ".cult_obs <- suppressWarnings(as.numeric(as.character(occ$is_cultivated_observation)))",
+          ".cult_loc <- tolower(trimws(as.character(occ$is_location_cultivated)))",
+          ".is_strict_wild <- !is.na(.cult_obs) & .cult_obs == 0 & (is.na(.cult_loc) | .cult_loc %in% c(\"false\", \"f\", \"0\"))",
+          "occ <- occ[.is_strict_wild, , drop = FALSE]",
+          "rm(.cult_obs, .cult_loc, .is_strict_wild)",
+          "cat(\"After strict cultivation filtering:\", nrow(occ), \"records\\n\")",
+          sep = "\n"
+        )
+      } else {
+        "# strict cultivation filter not applied"
       },
       "",
       "# --- Step 2: Classify each record into a broad observation category ---",
@@ -4300,6 +4467,8 @@ server <- function(input, output, session) {
     species_for_code <- if (!is.null(res$species) && nzchar(res$species)) res$species else "Pinus ponderosa"
 
     active_cultivated <- if (isTRUE(res$use_cultivated_filter)) isTRUE(res$include_cultivated) else TRUE
+    strict_wild_no_unknown <- isTRUE(res$strict_wild_no_unknown)
+    api_cultivated <- if (strict_wild_no_unknown) TRUE else active_cultivated
     requested_natives_only <- if (isTRUE(res$use_introduced_filter)) isTRUE(res$natives_only) else FALSE
     requested_only_geovalid <- isTRUE(res$only_geovalid)
 
@@ -4307,6 +4476,7 @@ server <- function(input, output, session) {
     effective_natives_only <- switch(
       strategy,
       strict = requested_natives_only,
+      zero_result_native_widened = FALSE,
       fallback_relaxed_native = FALSE,
       fallback_relaxed_geo = FALSE,
       fallback_coord_bearing = FALSE,
@@ -4393,7 +4563,7 @@ server <- function(input, output, session) {
       "  species              = species_name,",
       paste0("  natives.only         = ", tolower(as.character(effective_natives_only)), ","),
       paste0("  only.geovalid        = ", tolower(as.character(effective_only_geovalid)), ","),
-      paste0("  cultivated           = ", tolower(as.character(active_cultivated)), ","),
+      paste0("  cultivated           = ", tolower(as.character(api_cultivated)), ","),
       "  all.taxonomy         = TRUE,",
       "  native.status        = TRUE,",
       "  observation.type     = TRUE,",
@@ -4426,6 +4596,22 @@ server <- function(input, output, session) {
         )
       } else {
         "# strict-native filter not applied"
+      },
+      "",
+      if (strict_wild_no_unknown) {
+        paste(
+          "# Strict cultivation filter: retain observations explicitly marked non-cultivated",
+          "# and exclude locations BIEN explicitly marks as cultivated.",
+          ".cult_obs <- suppressWarnings(as.numeric(as.character(occ$is_cultivated_observation)))",
+          ".cult_loc <- tolower(trimws(as.character(occ$is_location_cultivated)))",
+          ".is_strict_wild <- !is.na(.cult_obs) & .cult_obs == 0 & (is.na(.cult_loc) | .cult_loc %in% c(\"false\", \"f\", \"0\"))",
+          "occ <- occ[.is_strict_wild, , drop = FALSE]",
+          "rm(.cult_obs, .cult_loc, .is_strict_wild)",
+          "cat(\"After strict cultivation filtering:\", nrow(occ), \"records\\n\")",
+          sep = "\n"
+        )
+      } else {
+        "# strict cultivation filter not applied"
       },
       "",
       "# --- Step 2: Classify records into observation categories ---",
@@ -4709,19 +4895,24 @@ server <- function(input, output, session) {
       sample_random,
       map_sampling_method,
       fast_large_species_mode,
+      filter_cfg$profile,
+      filter_cfg$allow_fallback,
       filter_cfg$use_default_profile,
       filter_cfg$use_cultivated_filter,
       filter_cfg$include_cultivated,
       filter_cfg$use_introduced_filter,
       filter_cfg$natives_only,
+      filter_cfg$strict_native_no_unknown,
+      filter_cfg$strict_wild_no_unknown,
       filter_cfg$only_plot_observations,
       filter_cfg$only_geovalid,
       filter_cfg$exclude_human_observation_records,
+      isTRUE(input$enable_taxon_autocorrect),
       sep = "||"
     )
 
     # 1. Per-session cache (fastest — no TTL needed within one session).
-    if (exists(cache_key, envir = query_cache, inherits = FALSE)) {
+    if (!retry_mode && exists(cache_key, envir = query_cache, inherits = FALSE)) {
       cached_res <- get(cache_key, envir = query_cache, inherits = FALSE)
       cached_res$cache_hit <- TRUE
       cached_res$query_elapsed_sec <- 0
@@ -4729,7 +4920,7 @@ server <- function(input, output, session) {
     }
 
     # 2. Cross-session shared cache (warm results from other sessions, TTL=30 min).
-    shared_hit <- get_shared_cache(cache_key)
+    shared_hit <- if (retry_mode) NULL else get_shared_cache(cache_key)
     if (!is.null(shared_hit)) {
       shared_hit$cache_hit <- TRUE
       shared_hit$query_elapsed_sec <- 0
@@ -4856,6 +5047,8 @@ server <- function(input, output, session) {
         fast_large_species_mode = fast_large_species_mode,
         trait_fetch_limit = trait_fetch_limit,
         occ_strategy = occ_strategy,
+        data_profile = filter_cfg$profile,
+        allow_fallback = filter_cfg$allow_fallback,
         use_default_filter_profile = filter_cfg$use_default_profile,
         use_cultivated_filter = filter_cfg$use_cultivated_filter,
         use_introduced_filter = filter_cfg$use_introduced_filter,
@@ -4877,8 +5070,17 @@ server <- function(input, output, session) {
         name_suggestion = name_suggestion
       )
 
-      set_cache(query_cache, cache_key, result)
-      set_shared_cache(cache_key, result)   # warm the cross-session cache
+      result$result_state <- classify_occurrence_result(
+        strategy = result$occ_strategy,
+        profile = result$data_profile,
+        occurrence_n = if (is.data.frame(result$occurrences)) nrow(result$occurrences) else 0L,
+        mappable_n = if (is.data.frame(result$occurrences_prepared$data)) nrow(result$occurrences_prepared$data) else 0L
+      )
+
+      if (!result$result_state %in% c("timeout", "backend_error")) {
+        set_cache(query_cache, cache_key, result)
+        set_shared_cache(cache_key, result)
+      }
       result
     })
   }, ignoreInit = TRUE)
@@ -4916,7 +5118,7 @@ server <- function(input, output, session) {
       )
     }
 
-    if (mappable_n == 0 && !is_bien_connection_error(res$query_errors)) {
+    if (mappable_n == 0 && !res$result_state %in% c("timeout", "backend_error")) {
       likely_filters <- character()
       if (isTRUE(res$use_default_filter_profile) || (isTRUE(res$use_introduced_filter) && isTRUE(res$natives_only))) {
         likely_filters <- c(likely_filters, "native-only")
@@ -5786,9 +5988,12 @@ server <- function(input, output, session) {
     res <- bien_results()
     if (is.null(res)) return(NULL)
     strategy <- if (!is.null(res$occ_strategy) && nzchar(res$occ_strategy)) res$occ_strategy else "strict"
-
-    # No banner for clean runs or startup
-    if (strategy %in% c("strict", "strict_no_unknown", "startup_preloaded_local_dataset")) return(NULL)
+    result_state <- if (!is.null(res$result_state)) res$result_state else classify_occurrence_result(
+      strategy,
+      if (!is.null(res$data_profile)) res$data_profile else "standard",
+      if (is.data.frame(res$occurrences)) nrow(res$occurrences) else 0L,
+      if (is.data.frame(res$occurrences_prepared$data)) nrow(res$occurrences_prepared$data) else 0L
+    )
 
     # Helper to build a banner div
     make_banner <- function(tier_class, icon, headline, body_html) {
@@ -5801,6 +6006,24 @@ server <- function(input, output, session) {
         )
       )
     }
+
+    if (identical(result_state, "no_coordinates")) {
+      return(make_banner(
+        "fb-banner-amber", "\u26a0\ufe0f",
+        "Records found, but none can be mapped",
+        paste0("BIEN returned ", nrow(res$occurrences), " records, but none contain usable coordinates under the effective filters. Tables and downloads remain available.")
+      ))
+    }
+    if (identical(result_state, "filtered_empty")) {
+      return(make_banner(
+        "fb-banner-amber", "\u2139\ufe0f",
+        "Records may exist, but none passed this profile",
+        "No records met the requested Strict or Custom criteria, and no filters were widened. Try Standard or edit Custom filters; this result is not evidence of biological absence."
+      ))
+    }
+
+    # No banner for clean runs or startup
+    if (strategy %in% c("strict", "strict_no_unknown", "startup_preloaded_local_dataset")) return(NULL)
 
     if (identical(strategy, "backend_timeout_error")) {
       return(make_banner(
@@ -5822,7 +6045,7 @@ server <- function(input, output, session) {
         )
       ))
     }
-    if (identical(strategy, "backend_connection_error")) {
+    if (strategy %in% c("backend_connection_error", "backend_query_error")) {
       return(make_banner(
         "fb-banner-orange", "\u274c",
         "BIEN backend connection error \u2014 no records loaded",
@@ -5947,7 +6170,7 @@ server <- function(input, output, session) {
     out
   })
 
-  # ── Flag composition bars (is_introduced / is_cultivated / is_geovalid) ─
+  # ── Flag composition bars (introduced / cultivation / geovalid) ─────────
   output$flag_composition_ui <- renderUI({
     res <- bien_results()
     if (is.null(res) || is.null(res$occurrences)) return(NULL)
@@ -5996,7 +6219,7 @@ server <- function(input, output, session) {
       "Non-introduced (=0)", "Introduced (=1)", "NSR-unevaluated (NULL)")
 
     cult_bar <- make_flag_bar(occ,
-      c("is_cultivated"),
+      c("is_cultivated_observation"),
       c("0", "false", "f"), c("1", "true", "t"),
       "#2563eb", "#d97706", "#d1d5db",
       "Not cultivated (=0)", "Cultivated (=1)", "Unevaluated (NULL)")
@@ -6021,7 +6244,7 @@ server <- function(input, output, session) {
           "This is the most common value in BIEN. It does not mean confirmed native.")
       ),
       if (!is.null(cult_bar)) tagList(
-        tags$div(class = "flag-comp-sublabel", "Cultivation status (is_cultivated)"),
+        tags$div(class = "flag-comp-sublabel", "Cultivation status (is_cultivated_observation)"),
         tags$div(class = "flag-comp-bar-wrap", cult_bar)
       ),
       if (!is.null(geo_bar)) tagList(
@@ -6163,8 +6386,12 @@ server <- function(input, output, session) {
     strategy <- res$occ_strategy
     if (!nzchar(strategy)) return(NULL)
     if (strategy %in% c("strict", "strict_no_unknown")) {
-      tags$div(class = "sdm-chip sdm-chip-ok",
-        "\u2714 SDM-ready \u2014 native, wild, and geovalid filters applied")
+      chip_text <- if (identical(res$data_profile, "strict")) {
+        "\u2714 Strict screening applied \u2014 review sampling and spatial bias before modeling"
+      } else {
+        "\u2714 Standard filters applied \u2014 unassessed status may be included"
+      }
+      tags$div(class = "sdm-chip sdm-chip-ok", chip_text)
     } else if (strategy %in% c("fallback_relaxed_native", "zero_result_native_widened",
                                 "fallback_relaxed_geo", "fallback_coord_bearing")) {
       tags$div(class = "sdm-chip sdm-chip-warn",
@@ -6254,8 +6481,8 @@ server <- function(input, output, session) {
 
     # Cultivated status gap
     mapped_df <- if (is.data.frame(occ_prep$data)) occ_prep$data else res$occurrences
-    if (!is.null(mapped_df) && is.data.frame(mapped_df)) {
-      cult_col <- find_first_col(mapped_df, c("is_cultivated", "cultivated"))
+    if (!isTRUE(res$strict_wild_no_unknown) && !is.null(mapped_df) && is.data.frame(mapped_df)) {
+      cult_col <- find_first_col(mapped_df, c("is_cultivated_observation"))
       if (is.null(cult_col) || all(is.na(mapped_df[[cult_col]]))) {
         warns <- c(warns, list(make_warn(
           "Cultivated status is not confirmed per record for this query \u2014 cultivated filter was applied at the query level only."
@@ -6373,7 +6600,7 @@ server <- function(input, output, session) {
     )
     cultivated_line <- summarize_status_counts(
       mapped_df,
-      c("is_cultivated", "cultivated"),
+      c("is_cultivated_observation"),
       missing_message = "Per-record cultivated status not returned by BIEN for this query",
       value_map = c(
         "true" = "cultivated", "false" = "not cultivated",
@@ -6699,8 +6926,14 @@ server <- function(input, output, session) {
           ),
           tags$div(tags$strong("Native-range records only: "),
             ifelse(isTRUE(res$use_introduced_filter) && isTRUE(res$natives_only), "yes", "no")),
-          tags$div(tags$strong("Exclude cultivated records: "),
-            ifelse(isTRUE(res$use_cultivated_filter) && !isTRUE(res$include_cultivated), "yes", "no")),
+          tags$div(tags$strong("Cultivation screening: "),
+            if (isTRUE(res$strict_wild_no_unknown)) {
+              "explicitly non-cultivated observations; locations marked cultivated excluded"
+            } else if (isTRUE(res$use_cultivated_filter) && !isTRUE(res$include_cultivated)) {
+              "explicitly cultivated records excluded; unassessed status may remain"
+            } else {
+              "all cultivation statuses included"
+            }),
           tags$div(tags$strong("Use BIEN default conservative filter profile: "),
             ifelse(isTRUE(res$use_default_filter_profile), "yes", "no")),
           tags$div(tags$strong("Show only plot/survey records: "),
