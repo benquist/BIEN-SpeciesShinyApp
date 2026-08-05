@@ -220,6 +220,8 @@ fetch_species_photo <- function(species_name, timeout_sec = 8) {
 
 # Normalize user-entered species strings so BIEN queries are robust to case.
 normalize_species_name <- function(x) {
+  if (length(x) == 0 || is.na(x[[1]])) return("")
+  x <- x[[1]]
   x <- gsub("_+", " ", as.character(x))
   x <- str_squish(x)
   if (!nzchar(x)) {
@@ -1292,7 +1294,7 @@ summarize_coordinate_quality <- function(occ_info) {
   paste0(
     "valid coordinates: ", qa$coord_valid,
     " | missing/out-of-range: ", qa$removed_invalid,
-    " | duplicate points removed: ", qa$duplicates_removed
+    " | coordinate/type-equivalent map rows collapsed: ", qa$duplicates_removed
   )
 }
 
@@ -1854,6 +1856,69 @@ read_downloaded_range_sf <- function(range_dir, species_name) {
 
 # Build a transparent BIEN-returned name summary for the app. This is a provisional
 # reconciliation aid for users, not a formal synonym or accepted-name adjudication.
+taxon_names_differ <- function(submitted_name, returned_name) {
+  submitted <- normalize_species_name(submitted_name)
+  returned <- normalize_species_name(returned_name)
+  nzchar(submitted) && nzchar(returned) && !identical(tolower(submitted), tolower(returned))
+}
+
+taxon_confirmation_key <- function(query_key, submitted_name, returned_name) {
+  if (!taxon_names_differ(submitted_name, returned_name)) return(NA_character_)
+  paste(query_key, normalize_species_name(submitted_name), normalize_species_name(returned_name), sep = "||")
+}
+
+summarize_evidence_quality <- function(res, matched_name = NA_character_) {
+  occ <- if (is.data.frame(res$occurrences)) res$occurrences else data.frame()
+  prepared <- if (is.list(res$occurrences_prepared)) res$occurrences_prepared else list()
+  qa <- if (is.list(prepared$qa)) prepared$qa else list()
+  prepared_data <- if (is.data.frame(prepared$data)) prepared$data else data.frame()
+  count_unknown <- function(candidates, known_values) {
+    col <- find_first_col(occ, candidates)
+    if (is.null(col) || nrow(occ) == 0) return(NA_integer_)
+    values <- ifelse(is.na(occ[[col]]), NA_character_, tolower(trimws(as.character(occ[[col]]))))
+    as.integer(sum(is.na(values) | values == "" | !values %in% known_values))
+  }
+  date_col <- find_first_col(occ, c("date_collected", "event_date", "collection_date", "year_collected"))
+  dated_n <- if (is.null(date_col)) NA_integer_ else {
+    values <- trimws(as.character(occ[[date_col]]))
+    as.integer(sum(!is.na(occ[[date_col]]) & nzchar(values)))
+  }
+  strategy <- if (!is.null(res$occ_strategy) && nzchar(res$occ_strategy)) res$occ_strategy else "unknown"
+  has_map_coordinates <- !is.null(prepared$lat_col) && !is.null(prepared$lon_col)
+  effective_label <- switch(
+    strategy,
+    strict = "requested filters retained",
+    strict_no_unknown = "strict explicit-status filters retained",
+    startup_preloaded_local_dataset = "startup sample; run Query BIEN for live evidence",
+    zero_result_native_widened = "establishment-status filter widened",
+    fallback_relaxed_native = "establishment-status filter widened",
+    fallback_relaxed_geo = "establishment and BIEN geovalid filters widened",
+    fallback_coord_bearing = "coordinate-bearing fallback; BIEN geovalid filter not retained",
+    fallback_allow_centroids = "administrative-centroid fallback",
+    strategy
+  )
+  list(
+    submitted_name = if (!is.null(res$submitted_name)) as.character(res$submitted_name) else as.character(res$species),
+    matched_name = matched_name,
+    names_differ = taxon_names_differ(if (!is.null(res$submitted_name)) res$submitted_name else res$species, matched_name),
+    requested_profile = if (!is.null(res$data_profile)) as.character(res$data_profile) else "standard",
+    effective_label = effective_label,
+    fallback_active = !strategy %in% c("strict", "strict_no_unknown", "startup_preloaded_local_dataset"),
+    fetched_n = if (!is.null(res$occurrences_returned)) as.integer(res$occurrences_returned) else nrow(occ),
+    retained_n = nrow(occ),
+    coordinate_valid_n = if (!is.null(qa$coord_valid)) as.integer(qa$coord_valid) else 0L,
+    coordinate_rows_collapsed = if (!is.null(qa$duplicates_removed)) as.integer(qa$duplicates_removed) else 0L,
+    mappable_before_cap_n = if (has_map_coordinates && !is.null(prepared$original_kept)) as.integer(prepared$original_kept) else if (has_map_coordinates) nrow(prepared_data) else 0L,
+    mapped_n = if (has_map_coordinates) nrow(prepared_data) else 0L,
+    map_cap = if (!is.null(res$map_point_cap)) as.integer(res$map_point_cap) else NA_integer_,
+    map_cap_applied = isTRUE(prepared$map_cap_applied),
+    introduced_unknown_n = count_unknown(c("is_introduced", "native_status"), c("0", "1", "false", "true", "f", "t", "native", "introduced", "not introduced")),
+    cultivation_unknown_n = count_unknown(c("is_cultivated_observation"), c("0", "1", "false", "true", "f", "t")),
+    geovalid_unknown_n = count_unknown(c("is_geovalid"), c("0", "1", "false", "true", "f", "t")),
+    dated_n = dated_n
+  )
+}
+
 build_reconciliation_table <- function(species_name, occ, traits, query_errors, range_obj) {
   has_real_error <- function(x) {
     if (length(x) == 0) return(FALSE)
@@ -1886,13 +1951,13 @@ build_reconciliation_table <- function(species_name, occ, traits, query_errors, 
     matched_authorship = NA_character_,
     matched_rank = "species",
     matched_taxon_id = NA_character_,
-    matched_backbone = "BIEN",
+    matched_backbone = NA_character_,
     matched_status = case_when(
       is.data.frame(occ) && nrow(occ) > 0 ~ "matched",
       query_has_error ~ "error",
       TRUE ~ "no_records"
     ),
-    accepted_name = matched_species,
+    accepted_name = NA_character_,
     accepted_taxon_id = NA_character_,
     synonym_type = NA_character_,
     match_method = ifelse(is.na(matched_species), "none", "BIEN_returned_taxon"),
@@ -1906,7 +1971,8 @@ build_reconciliation_table <- function(species_name, occ, traits, query_errors, 
       collapse = " ; "
     ),
     query_timestamp_utc = format(Sys.time(), tz = "UTC", usetz = TRUE),
-    backbone_version_or_release = as.character(utils::packageVersion("BIEN"))
+    backbone_version_or_release = NA_character_,
+    bien_package_version = as.character(utils::packageVersion("BIEN"))
   )
 }
 
@@ -2013,6 +2079,7 @@ build_preloaded_startup_result <- function() {
 
   list(
     species = STARTUP_SPECIES,
+    submitted_name = STARTUP_SPECIES,
     family_name = family_name,
     occurrences = occ,
     occurrences_prepared = occ_prepared,
@@ -2034,6 +2101,8 @@ build_preloaded_startup_result <- function() {
     fast_large_species_mode = TRUE,
     trait_fetch_limit = nrow(traits),
     occ_strategy = "startup_preloaded_local_dataset",
+    data_profile = "standard",
+    allow_fallback = TRUE,
     use_default_filter_profile = TRUE,
     use_cultivated_filter = TRUE,
     use_introduced_filter = TRUE,
@@ -2207,7 +2276,7 @@ ui <- fluidPage(
         --panel-border: #cfe2f3;
       }
       body {
-        padding: 20px 0;
+        padding: 12px 0;
         background: linear-gradient(180deg, #f7fbff 0%, #fbfef9 100%);
         color: #24445f;
       }
@@ -2215,17 +2284,17 @@ ui <- fluidPage(
         display: flex;
         align-items: center;
         justify-content: space-between;
-        gap: 20px;
-        padding: 20px;
+        gap: 14px;
+        padding: 12px 16px;
         background: linear-gradient(180deg, #ffffff 0%, #f2f9ff 100%);
         border-bottom: 1px solid var(--panel-border);
-        margin: -20px 0 20px 0;
+        margin: -12px 0 12px 0;
         box-shadow: 0 3px 12px rgba(31, 91, 143, 0.08);
       }
       .bien-header-brand {
         display: flex;
         align-items: center;
-        gap: 16px;
+        gap: 12px;
         flex-wrap: wrap;
         flex: 1 1 auto;
         min-width: 0;
@@ -2237,20 +2306,26 @@ ui <- fluidPage(
         margin: 0;
         color: var(--bien-blue-deep);
         font-weight: 700;
-        font-size: 2em;
+        font-size: 1.65em;
         line-height: 1.2;
       }
       .bien-subtitle {
-        margin: 8px 0 0 0;
+        margin: 4px 0 0 0;
         color: #426988;
-        font-size: 1.05em;
-        line-height: 1.4;
+        font-size: 0.98em;
+        line-height: 1.35;
         max-width: 920px;
       }
       .bien-logo {
-        height: 62px;
+        height: 48px;
         width: auto;
         filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.12));
+      }
+      .bien-logo-link { display: inline-flex; flex-shrink: 0; }
+      .bien-logo-link:focus-visible {
+        outline: 3px solid var(--bien-blue-deep);
+        outline-offset: 4px;
+        border-radius: 3px;
       }
       .bien-logo-fallback {
         display: none;
@@ -2260,9 +2335,9 @@ ui <- fluidPage(
         text-align: center;
       }
       .bien-species-photo {
-        width: 160px;
-        height: 160px;
-        border-radius: 12px;
+        width: 112px;
+        height: 112px;
+        border-radius: 8px;
         object-fit: cover;
         object-position: center 30%;
         display: block;
@@ -2274,7 +2349,7 @@ ui <- fluidPage(
         font-size: 0.68em;
         color: #6a8aa6;
         margin-top: 3px;
-        max-width: 160px;
+        max-width: 112px;
         overflow: hidden;
         white-space: nowrap;
         text-overflow: ellipsis;
@@ -2288,14 +2363,14 @@ ui <- fluidPage(
         font-size: 0.62em;
         color: #8aaabb;
         margin-top: 2px;
-        max-width: 160px;
+        max-width: 112px;
         text-align: center;
         line-height: 1.2;
       }
       .bien-photo-fallback {
-        width: 160px;
-        height: 160px;
-        border-radius: 12px;
+        width: 112px;
+        height: 112px;
+        border-radius: 8px;
         background: var(--bien-mint);
         border: 2px dashed var(--panel-border);
         display: flex;
@@ -2306,9 +2381,9 @@ ui <- fluidPage(
         text-align: center;
       }
       @media (max-width: 900px) {
-        .bien-species-photo, .bien-photo-fallback { width: 120px; height: 120px; }
-        .bien-photo-attr { max-width: 120px; }
-        .bien-photo-disclaimer { max-width: 120px; }
+        .bien-species-photo, .bien-photo-fallback { width: 96px; height: 96px; }
+        .bien-photo-attr { max-width: 96px; }
+        .bien-photo-disclaimer { max-width: 96px; }
       }
       @media (max-width: 640px) {
         .bien-species-photo-wrap { display: none; }
@@ -2585,11 +2660,33 @@ ui <- fluidPage(
       .occ-banner-sdm-warning { font-style: italic; color: #874d00; margin-top: 4px; }
       .map-caption-row {
         font-size: 0.81em;
-        color: #aaa;
+        color: #5f6b76;
         padding: 4px 0 6px 0;
         line-height: 1.4;
       }
       .map-caption-row.cap-warn { color: #d97b15; }
+      .occ-evidence-grid {
+        display: grid;
+        grid-template-columns: minmax(0, 2fr) minmax(280px, 1fr);
+        gap: 10px;
+        align-items: start;
+      }
+      .occ-evidence-grid .evidence-quality-grid {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+      }
+      .occ-evidence-grid .evidence-quality-panel,
+      .occ-evidence-grid .flag-comp-section { margin-bottom: 10px; }
+      #occurrence_map { height: clamp(480px, 68vh, 720px) !important; }
+      @media (max-width: 1100px) {
+        .occ-evidence-grid { grid-template-columns: 1fr; }
+        .occ-evidence-grid .evidence-quality-grid {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+      }
+      @media (max-width: 640px) {
+        .occ-evidence-grid .evidence-quality-grid { grid-template-columns: 1fr; }
+        #occurrence_map { height: clamp(380px, 58vh, 480px) !important; }
+      }
       .recon-callout {
         background: #f7f8fa;
         border-left: 3px solid var(--bien-blue);
@@ -2600,6 +2697,25 @@ ui <- fluidPage(
       }
       .recon-callout .rc-label { color: #888; font-size: 0.82em; margin-right: 4px; }
       .recon-callout .rc-value { color: #333; font-weight: 600; }
+      .evidence-quality-panel {
+        background: #f8faf9;
+        border: 1px solid #d7e3db;
+        border-left: 4px solid var(--bien-green);
+        border-radius: 0 6px 6px 0;
+        padding: 12px 14px;
+        margin-bottom: 12px;
+        color: #26332b;
+      }
+      .evidence-quality-header { display: flex; justify-content: space-between; gap: 12px; align-items: baseline; margin-bottom: 9px; }
+      .evidence-quality-title { font-size: 0.95em; font-weight: 700; }
+      .evidence-quality-state { font-size: 0.78em; color: #59675e; text-align: right; }
+      .evidence-quality-grid { display: grid; grid-template-columns: repeat(4, minmax(120px, 1fr)); gap: 8px; }
+      .evidence-quality-item { background: #fff; border: 1px solid #e2e8e4; border-radius: 4px; padding: 7px 9px; }
+      .evidence-quality-label { display: block; color: #66736b; font-size: 0.73em; font-weight: 600; text-transform: uppercase; }
+      .evidence-quality-value { display: block; margin-top: 2px; font-size: 0.88em; font-weight: 600; overflow-wrap: anywhere; }
+      .evidence-quality-note { margin-top: 9px; font-size: 0.8em; color: #59675e; line-height: 1.45; }
+      @media (max-width: 900px) { .evidence-quality-grid { grid-template-columns: repeat(2, minmax(120px, 1fr)); } }
+      @media (max-width: 520px) { .evidence-quality-grid { grid-template-columns: 1fr; } .evidence-quality-header { display: block; } .evidence-quality-state { text-align: left; margin-top: 3px; } }
       .disclosure-strip {
         background: #fffbf0;
         border-top: 1px solid #ffe0a0;
@@ -3049,17 +3165,45 @@ ui <- fluidPage(
       .sdm-note-icon { flex-shrink: 0; font-size: 1em; margin-top: 1px; }
       .sdm-note-text { flex: 1; }
       .sdm-note-value { font-weight: 600; color: #111827; }
+
+      /* ── Scandinavian-minimal Occurrence layout: logo hover, status stack, fluid map ── */
+      .bien-logo-link:hover .bien-logo {
+        transform: translateY(-1px);
+        filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.12)) brightness(1.05);
+      }
+      .bien-logo { transition: transform 120ms ease, filter 120ms ease; }
+
+      .bien-status-stack { margin-bottom: 4px; }
+      .bien-status-stack > * { margin-bottom: 10px; }
+      .bien-status-stack > *:last-child { margin-bottom: 0; }
+
+      #occurrence_map { margin-top: 2px; }
+
+      @media (min-width: 1400px) {
+        .col-sm-3 { width: 18%; }
+        .col-sm-9 { width: 82%; }
+      }
+      @media (max-width: 767px) {
+        #occurrence_map { height: 420px !important; }
+      }
     "))
   ),
   tags$div(
     class = "page-header",
     tags$div(
       class = "bien-header-brand",
-      tags$img(
-        src = "bien.png",
-        class = "bien-logo",
-        alt = "BIEN logo",
-        onerror = "this.style.display='none';"
+      tags$a(
+        href = "https://bien.nceas.ucsb.edu/bien/",
+        target = "_blank",
+        rel = "noopener noreferrer",
+        class = "bien-logo-link",
+        "aria-label" = "Visit the BIEN project website (opens in a new tab)",
+        tags$img(
+          src = "bien.png",
+          class = "bien-logo",
+          alt = "BIEN logo",
+          onerror = "this.style.display='none';"
+        )
       ),
       tags$div(
         class = "bien-header-copy",
@@ -3230,7 +3374,7 @@ ui <- fluidPage(
             tags$li(tags$strong("NSR-unevaluated \u2260 confirmed native."), " Records with is_introduced\u2009=\u2009NULL have not been assessed by the BIEN Native Species Resolver (NSR). They are not confirmed non-introduced and may represent introduced populations."),
             tags$li(tags$strong("Cultivation-unassessed records are included."), " Standard permits is_cultivated_observation\u2009IS\u2009NULL when the location is not marked cultivated. These are not confirmed wild occurrences."),
             tags$li(tags$strong("Filters widen step-by-step via a relaxation ladder."), " At maximum relaxation, confirmed-invasive records may be included. The amber banner states which tier was reached."),
-            tags$li(tags$strong("BIEN covers the Western Hemisphere only."), " Standard mode excludes NSR-confirmed introduced (is_introduced\u2009=\u20091) records. For Old World species, this removes many Americas-introduced records, so the random sample often skews toward Old World occurrences with unevaluated status (IS\u2009NULL). Those records are not confirmed native\u2014they have simply not been assessed by NSR. Conversely, 'All records' in Custom mode includes the large pool of Americas-introduced records and may appear \u2018more restricted\u2019 geographically due to BIEN's Americas-heavy collection density.")
+            tags$li(tags$strong("BIEN 4.2 is global in scope, but coverage is uneven."), " Returned records may come from any region; geographic, taxonomic, source, sampling, and NSR assessment coverage vary among regions and taxa. Unevaluated status does not establish nativeness, and missing records do not establish absence.")
           )
         )
       ),
@@ -3252,7 +3396,7 @@ ui <- fluidPage(
             style = "color:#6b7280;margin:4px 0 0 0;padding-left:16px;line-height:1.6;",
             tags$li(tags$strong("500-record cap in natural table order."), " Strict returns at most 500 records in database ingestion order \u2014 not spatially random. Apply spatial thinning before SDM use."),
             tags$li(tags$strong("Centroid status not fully resolved."), " is_centroid\u2009IS\u2009NULL records pass Strict; these may include county-center coordinates with 10\u2013100\u202fkm positional uncertainty."),
-            tags$li(tags$strong("Old World taxa will often return zero records."), " BIEN NSR coverage is primarily Western Hemisphere. Zero records does not mean the species is absent from BIEN."),
+            tags$li(tags$strong("Status screening can yield zero records."), " BIEN and NSR assessment coverage is uneven across regions. Zero screened records does not establish biological absence or absence from the broader BIEN database."),
             tags$li(tags$strong("Record reproducibility requires the database version."), " Re-running later may return different records. Record version with BIEN_metadata_database_version() in R.")
           )
         )
@@ -3277,7 +3421,7 @@ ui <- fluidPage(
           "Origin of records",
           tags$span(
             class = "bien-inline-tip", role = "button", tabindex = "0",
-            "data-bien-tip" = "Controls establishment-status filtering. 'Native or NSR-unevaluated' keeps records where BIEN's NSR confirms native (is_introduced=0) OR where no NSR record exists (is_introduced IS NULL). IS NULL does NOT mean probably native — it means no NSR determination was made for that taxon-region combination. BIEN NSR coverage is primarily Western Hemisphere; for Old World taxa choose 'NSR-confirmed native only' to avoid re-admitting introduced New World records.",
+            "data-bien-tip" = "Controls establishment-status filtering. 'Native or NSR-unevaluated' keeps records where BIEN's NSR reports is_introduced=0 OR where no NSR determination is available (is_introduced IS NULL). NULL does not mean probably native. BIEN and NSR coverage is uneven across regions; use explicit-status screening when that uncertainty is unacceptable.",
             HTML("&#9432;")
           )
         ),
@@ -3293,15 +3437,13 @@ ui <- fluidPage(
         ),
 
         # Coverage note: shown only when 'All records' is selected.
-        # For Old World species with BIEN-evaluated introduced Americas populations,
-        # 'All records' includes many is_introduced=1 Americas records, making the
-        # random sample disproportionately Americas-concentrated — appearing MORE
-        # geographically restricted than Standard, which excludes those records.
+        # A capped sample can be dominated by better-represented regions when all
+        # establishment statuses are included.
         conditionalPanel(
           condition = "input.data_profile === 'custom' && input.origin_radio === 'all'",
           tags$div(
             style = "font-size:0.82em;color:#7c5c00;background:#fff3cd;border-left:3px solid #e6a817;padding:4px 8px;margin:-2px 0 6px 0;border-radius:2px;",
-            HTML("<strong>Coverage note:</strong> BIEN's record pool is Americas-concentrated. For Old World species whose Americas populations have been evaluated by BIEN's NSR (is_introduced\u2009=\u20091), 'All records' admits those numerous Americas-introduced records into the random sample. The 1\u2009000-record random draw may then appear more Americas-restricted than Standard mode, which excludes NSR-confirmed introduced records. 'All records' is the least <em>filter</em>-restrictive option, not the least <em>geographically</em>-restrictive option.")
+            HTML("<strong>Coverage note:</strong> BIEN 4.2 is global in scope, but record density and establishment-status assessment are uneven among regions and taxa. Because 'All records' includes introduced and status-unassessed records, a capped sample can be dominated by better-represented regions and may not approximate either native range or complete global distribution. 'All records' is least filter-restrictive, not geographically representative.")
           )
         ),
 
@@ -3327,7 +3469,7 @@ ui <- fluidPage(
 
         checkboxInput("only_plot_observations",
           compact_label("Survey / plot records only",
-            "Keeps only formal plot/survey observations (structured floristic inventories with known area and sampling effort) and drops opportunistic records such as herbarium specimens and casual sightings. Note: enabling this on widespread species may yield a CONUS-skewed sample due to high FIA plot density in the US."),
+            "Keeps records heuristically categorized as plot/survey evidence from BIEN provenance fields and drops other observation categories. Plot design, sampled area, effort, completeness, and community composition are not verified by this classification."),
           value = FALSE),
         checkboxInput("only_geovalid",
           compact_label("Geovalid coordinates only",
@@ -3575,7 +3717,7 @@ ui <- fluidPage(
               tags$br(),
               tags$a("https://biendata.org/", href = "https://biendata.org/", target = "_blank"),
               tags$p(style = "margin:4px 0 0 0;font-size:0.93em;color:#444;",
-                "The main BIEN data portal — browse species, traits, and range data, and access the full BIEN occurrence database for the Americas.")
+                "The main BIEN data portal provides access to global plant occurrence, trait, and range data. Geographic, taxonomic, and source coverage is uneven.")
             ),
             tags$div(
               class = "bien-link-card",
@@ -3608,7 +3750,7 @@ ui <- fluidPage(
               class = "bien-pub-card",
               tags$strong("\U0001F4D6 Latest BIEN publication"),
               tags$br(),
-              tags$em("Enquist et al. (2026). BIEN: Botanical Information and Ecology Network. Methods in Ecology and Evolution."),
+              tags$em("Enquist et al. (2026). BIEN: A biodiversity informatics ecosystem advancing open and reproducible workflows for plant observation, plot and trait data. Methods in Ecology and Evolution 17:1556-1584."),
               tags$br(),
               tags$a("https://besjournals.onlinelibrary.wiley.com/doi/abs/10.1111/2041-210x.70274",
                      href = "https://besjournals.onlinelibrary.wiley.com/doi/abs/10.1111/2041-210x.70274", target = "_blank"),
@@ -3637,27 +3779,31 @@ ui <- fluidPage(
 
         tabPanel(
           "Occurrence",
-          br(),
-          uiOutput("onboarding_banner_ui"),
-          uiOutput("recon_callout_ui"),
-          uiOutput("qa_chips_bar_ui"),
-          uiOutput("sdm_readiness_chip_ui"),
-          uiOutput("occ_strategy_banner_ui"),
-          uiOutput("flag_composition_ui"),
-          uiOutput("occ_copy_r_code_ui"),
+          tags$div(
+            class = "bien-status-stack",
+            uiOutput("onboarding_banner_ui"),
+            uiOutput("occ_strategy_banner_ui"),
+            tags$div(
+              class = "occ-evidence-grid",
+              uiOutput("evidence_quality_ui"),
+              uiOutput("flag_composition_ui")
+            )
+          ),
           leafletOutput("occurrence_map", height = 620),
-          uiOutput("map_caption_ui"),
-          br(),
-          uiOutput("overview_notice"),
-          uiOutput("slow_query_alert"),
-          br(),
-          uiOutput("summary_warn_rail_ui"),
+          tags$div(
+            class = "bien-status-stack",
+            uiOutput("map_caption_ui"),
+            uiOutput("occ_copy_r_code_ui"),
+            uiOutput("overview_notice"),
+            uiOutput("slow_query_alert"),
+            uiOutput("summary_warn_rail_ui")
+          ),
           tags$p(
             style = "color:#555;max-width:900px;font-size:0.9em;",
             "Statistics for the current map. Load full BIEN totals and source fractions on demand."
           ),
           actionButton("load_summary_counts", "Load full BIEN counts (slower)", class = "btn-default btn-sm"),
-          br(), br(),
+          br(),
           htmlOutput("query_summary")
         ),
         tabPanel(
@@ -3711,9 +3857,8 @@ ui <- fluidPage(
           tags$h4("Observation Records"),
           tags$div(
             class = "disclosure-strip",
-            tags$strong("Deduplication note: "),
-            "Records are deduplicated on species + latitude + longitude + observation_type. ",
-            "Two specimens from different collections at the same plot coordinates are collapsed to one record. ",
+            tags$strong("Map preparation note: "),
+            "The map collapses rows sharing species + latitude + longitude + observation_type. The observation table and occurrence CSV retain the current app-sample rows and are not source-record deduplicated. ",
             "Observation type (Specimen, Plot, Citizen science, HumanObservation) is classified heuristically from datasource and observation_type fields; some records may be misclassified. ",
             tags$strong("\u2018Other / unknown\u2019 category "),
             "includes records where source type could not be determined \u2014 treat these with caution."
@@ -3746,19 +3891,19 @@ ui <- fluidPage(
           DTOutput("trait_table")
         ),
         tabPanel(
-          "Community",
+          "Plot evidence",
           br(),
           tags$div(
             class = "disclosure-strip",
             tags$strong("Plot records only: "),
             "This map shows records categorized as Plot\u2009/\u2009survey for the current species. ",
-            "These are structured floristic surveys with known area and sampling effort \u2014 distinct from herbarium specimens or citizen-science observations shown on the main Occurrence tab. ",
-            "Plot presence reflects detection within a defined monitoring network, not the full species range."
+            "This category is assigned heuristically from BIEN provenance fields. Plot design, sampled area, effort, completeness, and co-occurring taxa are not verified. ",
+            "These records show evidence associated with plot or survey sources, not community composition or the full species range."
           ),
           uiOutput("community_notice"),
           uiOutput("community_map_ui"),
           br(),
-          tags$h4("Plot Community Summary"),
+          tags$h4("Plot Evidence Summary"),
           uiOutput("community_summary")
         ),
         tabPanel("Range", br(),
@@ -3834,15 +3979,15 @@ ui <- fluidPage(
           verbatimTextOutput("bien_query_code"),
           br(),
 
-          tags$h4("Plot Community Downloads"),
+          tags$h4("Plot Evidence Downloads"),
           tags$p(
             style = "color:#555;max-width:900px;",
-            "Plot / survey records only (structured floristic inventories with known area and sampling effort). ",
+            "Records heuristically categorized as plot / survey evidence; sampling design, area, effort, and completeness are not verified. ",
             "The R script is self-contained: it fetches occurrence records directly and filters inline \u2014 no intermediate file is required."
           ),
-          downloadButton("download_plot_csv", "Download plot/community CSV", class = "btn btn-default btn-sm"),
+          downloadButton("download_plot_csv", "Download plot-evidence CSV", class = "btn btn-default btn-sm"),
           tags$span("\u00A0"),
-          downloadButton("download_plot_repro_script", "Download plot/community R code", class = "btn btn-default btn-sm"),
+          downloadButton("download_plot_repro_script", "Download plot-evidence R code", class = "btn btn-default btn-sm"),
           br(), br(),
           verbatimTextOutput("plot_query_code"),
           br(),
@@ -3884,6 +4029,16 @@ server <- function(input, output, session) {
   trait_cache <- new.env(parent = emptyenv())
   range_cache <- new.env(parent = emptyenv())
   manual_query_nonce <- reactiveVal(0L)
+  query_execution_nonce <- reactiveVal(0L)
+  confirmed_taxon_key <- reactiveVal(NULL)
+
+  require_confirmed_taxon <- function() {
+    key <- current_taxon_confirmation_key()
+    if (!is.na(key) && !identical(confirmed_taxon_key(), key)) {
+      stop("Confirm the BIEN-returned taxon before downloading this result.", call. = FALSE)
+    }
+    invisible(TRUE)
+  }
 
   # If no pre-cached sample data exists for the startup species, auto-trigger
   # a live BIEN query after the first reactive flush so the map populates
@@ -3943,7 +4098,7 @@ server <- function(input, output, session) {
       update_species_select_input(STARTUP_SPECIES, choices = startup_species_suggestions)
     }
 
-    valid_tabs <- c("About & Help", "Occurrence", "Community", "Observations",
+    valid_tabs <- c("About & Help", "Occurrence", "Plot evidence", "Observations",
                     "Traits", "Range", "Download", "Explore this species", "Temporal Distribution")
     if (!is.null(tab_from_url) && nzchar(tab_from_url) &&
         utils::URLdecode(tab_from_url) %in% valid_tabs) {
@@ -3997,11 +4152,11 @@ server <- function(input, output, session) {
     help_text <- switch(
       active_tab,
       "Occurrence" = "Use this tab to inspect mapped points and the summary section below the map. Load BIEN total counts on demand for full-database context.",
-      "Community" = "Map and summarize records categorized as Plot / survey for the current species.",
+      "Plot evidence" = "Map and summarize records heuristically categorized as Plot / survey evidence for the current species; plot design and effort are not verified.",
       "Observations" = "Review observation-source composition at the top, then inspect row-level occurrence fields, provenance columns, and coordinates below.",
       "Traits" = "See grouped trait counts and example values by trait name and unit at the top, with raw BIEN trait records below.",
       "Range" = "Load optional BIEN range artifacts and inspect mapped range layers when available.",
-      "Download" = "Download occurrence, plot/community, and trait datasets plus matching reproducible R code.",
+      "Download" = "Download the current occurrence sample, plot-evidence subset, trait records, and matching rerun code.",
       "Explore this species" = "Open external species references generated from the current species name.",
       "About & Help" = "Read app background, scope, and interpretation context.",
       "Use Query BIEN to run live retrieval."
@@ -4083,7 +4238,8 @@ server <- function(input, output, session) {
       "#",
       "# REQUIRED CITATION",
       "# -----------------",
-      "# Enquist et al. (2026). BIEN: Botanical Information and Ecology Network.",
+      "# Enquist et al. (2026). BIEN: A biodiversity informatics ecosystem advancing open and reproducible workflows for plant observation, plot and trait data.",
+      "# Methods in Ecology and Evolution 17:1556-1584.",
       "# Methods in Ecology and Evolution.",
       "# DOI: https://doi.org/10.1111/2041-210x.70274",
       "# Also run citation(\"BIEN\") for the R package citation.",
@@ -4092,7 +4248,8 @@ server <- function(input, output, session) {
       "# ----------------------",
       "# Downloads plant occurrence records for one species from the BIEN database",
       "# (Botanical Information and Ecology Network) and saves the result to CSV.",
-      "# BIEN covers vascular plants of the Americas. Records include herbarium",
+      "# BIEN 4.2 is global in scope. Geographic, taxonomic, source, sampling, and",
+      "# establishment-assessment coverage are uneven. Records include herbarium",
       "# specimens, floristic plot surveys, and field observations.",
       "# Each record is a documented occurrence, NOT a model prediction.",
       "#",
@@ -4370,7 +4527,8 @@ server <- function(input, output, session) {
       "#",
       "# REQUIRED CITATION",
       "# -----------------",
-      "# Enquist et al. (2026). BIEN: Botanical Information and Ecology Network.",
+      "# Enquist et al. (2026). BIEN: A biodiversity informatics ecosystem advancing open and reproducible workflows for plant observation, plot and trait data.",
+      "# Methods in Ecology and Evolution 17:1556-1584.",
       "# Methods in Ecology and Evolution.",
       "# DOI: https://doi.org/10.1111/2041-210x.70274",
       "# Also run citation(\"BIEN\") for the R package citation.",
@@ -4507,17 +4665,19 @@ server <- function(input, output, session) {
       "#",
       "# REQUIRED CITATION",
       "# -----------------",
-      "# Enquist et al. (2026). BIEN: Botanical Information and Ecology Network.",
+      "# Enquist et al. (2026). BIEN: A biodiversity informatics ecosystem advancing open and reproducible workflows for plant observation, plot and trait data.",
+      "# Methods in Ecology and Evolution 17:1556-1584.",
       "# Methods in Ecology and Evolution.",
       "# DOI: https://doi.org/10.1111/2041-210x.70274",
       "# Also run citation(\"BIEN\") for the R package citation.",
       "#",
       "# WHAT THIS SCRIPT DOES",
       "# ----------------------",
-      "# Downloads all occurrence records for one species from BIEN, assigns",
+      "# Downloads a capped occurrence result for one species from BIEN, assigns",
       "# observation categories, and then filters to 'Plot / survey' records only.",
       "# Plot / survey records are structured floristic inventories with known",
-      "# sampling area and effort, making them suitable for community analyses.",
+      "# provenance-keyword categories. Plot area, effort, completeness, and",
+      "# suitability for community analysis are not established by this script.",
       "#",
       "# This script is SELF-CONTAINED: it fetches data directly without reading",
       "# from any intermediate CSV file. No occurrence script needs to run first.",
@@ -4910,10 +5070,15 @@ server <- function(input, output, session) {
       isTRUE(input$enable_taxon_autocorrect),
       sep = "||"
     )
+    execution_nonce <- isolate(query_execution_nonce()) + 1L
+    query_execution_nonce(execution_nonce)
+    query_run_id <- paste0(cache_key, "||run=", execution_nonce)
 
     # 1. Per-session cache (fastest — no TTL needed within one session).
     if (!retry_mode && exists(cache_key, envir = query_cache, inherits = FALSE)) {
       cached_res <- get(cache_key, envir = query_cache, inherits = FALSE)
+      cached_res$submitted_name <- species_input
+      cached_res$query_run_id <- query_run_id
       cached_res$cache_hit <- TRUE
       cached_res$query_elapsed_sec <- 0
       return(cached_res)
@@ -4922,6 +5087,8 @@ server <- function(input, output, session) {
     # 2. Cross-session shared cache (warm results from other sessions, TTL=30 min).
     shared_hit <- if (retry_mode) NULL else get_shared_cache(cache_key)
     if (!is.null(shared_hit)) {
+      shared_hit$submitted_name <- species_input
+      shared_hit$query_run_id <- query_run_id
       shared_hit$cache_hit <- TRUE
       shared_hit$query_elapsed_sec <- 0
       set_cache(query_cache, cache_key, shared_hit)   # promote to session cache
@@ -5020,12 +5187,14 @@ server <- function(input, output, session) {
       incProgress(0.85, detail = "Preparing map and QA summary")
       occ_prepared <- if (is.data.frame(occ)) prepare_occurrences(occ, map_point_cap = map_point_cap, sample_method = display_sampling_method) else list(data = NULL, lat_col = NULL, lon_col = NULL, qa = list(total = 0, coord_valid = 0, kept = 0, removed = 0, removed_invalid = 0, duplicates_removed = 0), map_cap_applied = FALSE, map_cap = map_point_cap, original_kept = 0, sample_method = display_sampling_method)
       family_name <- extract_primary_value(occ, c("scrubbed_family", "family", "verbatim_family"))
-      reconciliation_tbl <- build_reconciliation_table(species_name, occ, NULL, query_errors, NULL)
+      reconciliation_tbl <- build_reconciliation_table(species_input, occ, NULL, query_errors, NULL)
 
       incProgress(1, detail = "Done")
 
       result <- list(
         species = species_name,
+        submitted_name = species_input,
+        query_run_id = query_run_id,
         family_name = family_name,
         occurrences = occ,
         occurrences_prepared = occ_prepared,
@@ -5230,6 +5399,7 @@ server <- function(input, output, session) {
       paste0(species_safe, "_occurrence_dataset.csv")
     },
     content = function(file) {
+      require_confirmed_taxon()
       res <- bien_results()
       if (!is.data.frame(res$occurrences)) {
         write.csv(data.frame(message = "No occurrence dataset available for download."), file, row.names = FALSE)
@@ -5246,6 +5416,7 @@ server <- function(input, output, session) {
       paste0(species_safe, "_reproduce_occurrence_dataset.R")
     },
     content = function(file) {
+      require_confirmed_taxon()
       res <- bien_results()
       writeLines(build_occurrence_repro_script(res), file, useBytes = TRUE)
     }
@@ -5258,6 +5429,7 @@ server <- function(input, output, session) {
       paste0(species_safe, "_trait_dataset.csv")
     },
     content = function(file) {
+      require_confirmed_taxon()
       res <- bien_results()
       trait_bundle <- trait_results()
       traits_df <- trait_bundle$data
@@ -5273,9 +5445,10 @@ server <- function(input, output, session) {
     filename = function() {
       res <- bien_results()
       species_safe <- gsub("[^A-Za-z0-9_]+", "_", if (!is.null(res$species)) res$species else "species")
-      paste0(species_safe, "_plot_community_dataset.csv")
+      paste0(species_safe, "_plot_evidence_dataset.csv")
     },
     content = function(file) {
+      require_confirmed_taxon()
       res <- bien_results()
       bundle <- get_plot_community_bundle(res)
       plot_df <- bundle$raw
@@ -5291,9 +5464,10 @@ server <- function(input, output, session) {
     filename = function() {
       res <- bien_results()
       species_safe <- gsub("[^A-Za-z0-9_]+", "_", if (!is.null(res$species)) res$species else "species")
-      paste0(species_safe, "_reproduce_plot_community_dataset.R")
+      paste0(species_safe, "_reproduce_plot_evidence_dataset.R")
     },
     content = function(file) {
+      require_confirmed_taxon()
       res <- bien_results()
       writeLines(build_plot_repro_script(res), file, useBytes = TRUE)
     }
@@ -5306,18 +5480,7 @@ server <- function(input, output, session) {
       paste0(species_safe, "_reproduce_trait_dataset.R")
     },
     content = function(file) {
-      res <- bien_results()
-      writeLines(build_trait_repro_script(res), file, useBytes = TRUE)
-    }
-  )
-
-  output$download_trait_repro_script <- downloadHandler(
-    filename = function() {
-      res <- bien_results()
-      species_safe <- gsub("[^A-Za-z0-9_]+", "_", if (!is.null(res$species)) res$species else "species")
-      paste0(species_safe, "_reproduce_trait_dataset.R")
-    },
-    content = function(file) {
+      require_confirmed_taxon()
       res <- bien_results()
       writeLines(build_trait_repro_script(res), file, useBytes = TRUE)
     }
@@ -5330,6 +5493,7 @@ server <- function(input, output, session) {
       paste0(species_safe, "_BIEN_data_bundle_", format(Sys.Date(), "%Y%m%d"), ".zip")
     },
     content = function(file) {
+      require_confirmed_taxon()
       res         <- bien_results()
       trait_bundle <- trait_results()
       sp_safe     <- gsub("[^A-Za-z0-9_]+", "_", if (!is.null(res$species)) res$species else "species")
@@ -5355,11 +5519,11 @@ server <- function(input, output, session) {
         file.path(tmp_dir, paste0(sp_safe, "_traits.csv")),
         "No trait data available.")
 
-      # Plot community CSV
+      # Plot evidence CSV
       plot_bundle <- tryCatch(get_plot_community_bundle(res), error = function(e) list(raw = NULL))
       write_csv_clean(plot_bundle$raw,
-        file.path(tmp_dir, paste0(sp_safe, "_plot_community.csv")),
-        "No plot community data available.")
+        file.path(tmp_dir, paste0(sp_safe, "_plot_evidence.csv")),
+        "No plot evidence available.")
 
       # R repro scripts
       writeLines(build_occurrence_repro_script(res),
@@ -5367,7 +5531,7 @@ server <- function(input, output, session) {
       writeLines(build_trait_repro_script(res),
         file.path(tmp_dir, paste0(sp_safe, "_reproduce_traits.R")), useBytes = TRUE)
       writeLines(build_plot_repro_script(res),
-        file.path(tmp_dir, paste0(sp_safe, "_reproduce_plot_community.R")), useBytes = TRUE)
+        file.path(tmp_dir, paste0(sp_safe, "_reproduce_plot_evidence.R")), useBytes = TRUE)
 
       # README.txt
       occ_n    <- if (is.data.frame(res$occurrences)) nrow(res$occurrences) else 0
@@ -5382,18 +5546,17 @@ server <- function(input, output, session) {
         paste0("Source: https://github.com/benquist/BIEN-SpeciesShinyApp"),
         "",
         "REQUIRED CITATION",
-        "Enquist et al. (2026). BIEN: Botanical Information and Ecology Network.",
-        "Methods in Ecology and Evolution.",
+        "Enquist et al. (2026). BIEN: A biodiversity informatics ecosystem advancing open and reproducible workflows for plant observation, plot and trait data. Methods in Ecology and Evolution 17:1556-1584.",
         "DOI: https://doi.org/10.1111/2041-210x.70274",
         "Also run: citation(\"BIEN\") in R for the package citation.",
         "",
         "FILES IN THIS BUNDLE",
         paste0(sp_safe, "_occurrences.csv              : Occurrence records (", occ_n, " rows). Clean CSV, load with read.csv()."),
         paste0(sp_safe, "_traits.csv                   : Trait records (", trait_n, " rows). Check 'unit' column before pooling values."),
-        paste0(sp_safe, "_plot_community.csv            : Plot/survey records (", plot_n, " rows), filtered from occurrences."),
+        paste0(sp_safe, "_plot_evidence.csv             : Heuristically categorized plot/survey evidence (", plot_n, " rows), filtered from occurrences."),
         paste0(sp_safe, "_reproduce_occurrences.R       : R script to reproduce the occurrence dataset."),
         paste0(sp_safe, "_reproduce_traits.R            : R script to reproduce the trait dataset."),
-        paste0(sp_safe, "_reproduce_plot_community.R    : R script to reproduce the plot/survey dataset (self-contained)."),
+        paste0(sp_safe, "_reproduce_plot_evidence.R     : R script to rerun the plot-evidence query (self-contained)."),
         "",
         "FILTER SETTINGS",
         paste0("Filter profile:       ", if (isTRUE(res$use_default_filter_profile)) "conservative default" else "custom"),
@@ -5915,7 +6078,89 @@ server <- function(input, output, session) {
                              c("scrubbed_species_binomial", "species", "scientific_name"))
     if (is.null(sp_col)) return(NA_character_)
     vals <- na.omit(unique(as.character(res$occurrences[[sp_col]])))
-    if (length(vals) > 0) vals[[1]] else NA_character_
+    if (length(vals) > 0) paste(vals, collapse = ", ") else NA_character_
+  })
+
+  current_taxon_confirmation_key <- reactive({
+    res <- bien_results()
+    if (is.null(res)) return(NA_character_)
+    taxon_confirmation_key(
+      if (!is.null(res$query_run_id)) res$query_run_id else if (!is.null(res$query_cache_key)) res$query_cache_key else "query",
+      if (!is.null(res$submitted_name)) res$submitted_name else res$species,
+      matched_taxon_name_rv()
+    )
+  })
+
+  observeEvent(current_taxon_confirmation_key(), {
+    key <- current_taxon_confirmation_key()
+    if (is.na(key) || identical(confirmed_taxon_key(), key)) return(NULL)
+    res <- bien_results()
+    showModal(modalDialog(
+      title = "Confirm the BIEN-returned taxon",
+      tags$p(
+        "You submitted ", tags$em(if (!is.null(res$submitted_name)) res$submitted_name else res$species),
+        ", but BIEN returned records under ", tags$em(matched_taxon_name_rv()), "."
+      ),
+      tags$p(
+        "This is a provisional BIEN-returned name, not an independently verified accepted-name decision. Confirm the taxon before interpreting or downloading these results."
+      ),
+      easyClose = FALSE,
+      footer = actionButton("confirm_taxon_match", "Confirm this returned taxon", class = "btn-primary")
+    ))
+  }, ignoreInit = FALSE)
+
+  observeEvent(input$confirm_taxon_match, {
+    key <- current_taxon_confirmation_key()
+    if (!is.na(key)) confirmed_taxon_key(key)
+    removeModal()
+  }, ignoreInit = TRUE)
+
+  output$evidence_quality_ui <- renderUI({
+    res <- bien_results()
+    if (is.null(res) || !is.data.frame(res$occurrences)) return(NULL)
+    evidence <- summarize_evidence_quality(res, matched_taxon_name_rv())
+    confirmation_key <- current_taxon_confirmation_key()
+    confirmation_text <- if (is.na(confirmation_key)) {
+      "Submitted and BIEN-returned names agree"
+    } else if (identical(confirmed_taxon_key(), confirmation_key)) {
+      "Different returned name confirmed for this query"
+    } else {
+      "Taxon confirmation required"
+    }
+    fmt <- function(value) if (is.na(value)) "not available" else format(value, big.mark = ",")
+    item <- function(label, value) tags$div(
+      class = "evidence-quality-item",
+      tags$span(class = "evidence-quality-label", label),
+      tags$span(class = "evidence-quality-value", value)
+    )
+    unknown_text <- paste0(
+      "establishment ", fmt(evidence$introduced_unknown_n),
+      " | cultivation ", fmt(evidence$cultivation_unknown_n),
+      " | BIEN geovalid ", fmt(evidence$geovalid_unknown_n)
+    )
+    tags$section(
+      class = "evidence-quality-panel",
+      "aria-label" = "Evidence quality for the current BIEN result",
+      tags$div(class = "evidence-quality-header",
+        tags$span(class = "evidence-quality-title", "Evidence quality"),
+        tags$span(class = "evidence-quality-state", role = "status", "aria-live" = "polite", confirmation_text)
+      ),
+      tags$div(class = "evidence-quality-grid",
+        item("Submitted taxon", evidence$submitted_name),
+        item("BIEN-returned taxon", if (is.na(evidence$matched_name)) "not returned" else evidence$matched_name),
+        item("Requested profile", tools::toTitleCase(evidence$requested_profile)),
+        item("Effective query", evidence$effective_label),
+        item("Rows", paste0(fmt(evidence$fetched_n), " fetched | ", fmt(evidence$retained_n), " in app")),
+        item("Coordinates", paste0(fmt(evidence$coordinate_valid_n), " in range | ", fmt(evidence$coordinate_rows_collapsed), " map rows collapsed")),
+        item("Map", paste0(fmt(evidence$mapped_n), " of ", fmt(evidence$mappable_before_cap_n), if (evidence$map_cap_applied) paste0(" (cap ", fmt(evidence$map_cap), ")") else "")),
+        item("Unknown / unassessed", unknown_text),
+        item("Collection dates", paste0(fmt(evidence$dated_n), " of ", fmt(evidence$retained_n), " rows dated"))
+      ),
+      tags$div(class = "evidence-quality-note",
+        tags$strong("Three quality layers: "),
+        tags$code("is_geovalid"), " is a BIEN-provided flag. App map preparation checks numeric, in-range coordinates, collapses coordinate/type-equivalent map rows, and applies the map cap. Comprehensive coordinate, taxonomic, sampling-bias, and source-record QA is not performed."
+      )
+    )
   })
 
   # ── Taxon match banner: shown across all tabs when BIEN resolves a different name ────
@@ -5924,14 +6169,11 @@ server <- function(input, output, session) {
     if (is.null(res) || is.null(res$occurrences)) return(NULL)
     if (is.null(res$species) || length(res$species) == 0) return(NULL)
 
-    input_name   <- trimws(as.character(res$species))
+    input_name   <- trimws(as.character(if (!is.null(res$submitted_name)) res$submitted_name else res$species))
     matched_name <- matched_taxon_name_rv()
 
     if (is.na(matched_name)) return(NULL)
-    names_differ <- !identical(
-      tolower(trimws(input_name)),
-      tolower(trimws(matched_name))
-    )
+    names_differ <- taxon_names_differ(input_name, matched_name)
     if (!names_differ) return(NULL)
 
     tags$div(
@@ -6066,7 +6308,7 @@ server <- function(input, output, session) {
           "or NSR-unevaluated (is_introduced IS NULL). ",
           "No records meeting this criterion currently exist in the BIEN dataset for this species, ",
           "so the native-status filter was automatically removed. ",
-          tags$strong("The map now shows all BIEN records regardless of establishment status, "),
+          tags$strong("The map now shows the returned capped BIEN sample regardless of establishment status, "),
           "including occurrences BIEN has confirmed as introduced (is_introduced\u2009=\u20091). ",
           "These records may represent the species\u2019s invaded range rather than its native distribution. ",
           "Do not use these records for native-range SDM/ENM calibration or IUCN AOO/EOO calculations ",
@@ -6088,7 +6330,7 @@ server <- function(input, output, session) {
               "For this species, every BIEN occurrence record carries is_introduced\u2009=\u20091, meaning NSR ",
               "has evaluated all records and classified them as introduced at the collection location. ",
               "Because no records survive that filter, the app automatically widened the query to include ",
-              "all BIEN records. This is not a data error \u2014 it reflects BIEN\u2019s current taxonomic and ",
+              "the widened capped BIEN result. This is not a data error \u2014 it reflects BIEN\u2019s current taxonomic and ",
               "geographic assessment for this species at these localities."
             )
           )
@@ -6426,14 +6668,14 @@ server <- function(input, output, session) {
         HTML(paste0(
           "\u26a0 Showing ", format(mapped_n, big.mark = ","), n_denom,
           " (sampling method: ", htmltools::htmlEscape(method_txt),
-          "). Spatial density is not comparable across taxa. Increase limit in sidebar or download the full dataset."
+          "). Spatial density is not comparable across taxa. Increase the map cap or download the current app sample."
         ))
       )
     } else if (mapped_n > 0) {
       tags$div(
         class = "map-caption-row",
         paste0("Showing ", format(mapped_n, big.mark = ","),
-               " occurrence records \u00b7 BIEN database (Western Hemisphere)")
+               " occurrence records \u00b7 BIEN 4.2 \u00b7 global scope \u00b7 uneven geographic, taxonomic, source, and sampling coverage \u00b7 mapped records are not a complete range")
       )
     } else {
       NULL
@@ -6818,7 +7060,7 @@ server <- function(input, output, session) {
       " | Mapped points: ", mappable_n,
       " | Query date: ",   format(Sys.Date(), "%Y-%m-%d"),
       " | BIEN snapshot: \u2298 not available",
-      " | Source: BIEN database (Western Hemisphere)"
+      " | Source: BIEN 4.2 (global scope; uneven geographic, taxonomic, source, sampling, and NSR assessment coverage)"
     )
 
     # ── Assemble structured output ────────────────────────────────────────
@@ -6850,8 +7092,8 @@ server <- function(input, output, session) {
       tags$div(class = "metric-row",
         make_metric_card(format(occ_n, big.mark = ","),    "Records in app",   "matching current filters"),
         make_metric_card(total_all_fmt,                    "Total BIEN",        "unfiltered (load above)"),
-        make_metric_card(format(mappable_n, big.mark = ","), "Points on map",  "post-QA"),
-        make_metric_card(qa_removed_fmt,                   "Removed by QA",    "duplicates + invalid coords")
+        make_metric_card(format(mappable_n, big.mark = ","), "Points on map",  "after app map preparation"),
+        make_metric_card(qa_removed_fmt,                   "Excluded/collapsed for map", "invalid coordinates + coordinate-equivalent rows")
       ),
 
       # Active filter chips
@@ -6868,9 +7110,9 @@ server <- function(input, output, session) {
 
       # QA one-liner
       tags$div(class = "qa-summary-line",
-        tags$strong("QA:"),
-        " valid records: ", occ_n,
-        " \u00b7 duplicates removed: ", qa_removed_fmt,
+        tags$strong("App map preparation:"),
+        " app-sample rows: ", occ_n,
+        " \u00b7 excluded or collapsed for map: ", qa_removed_fmt,
         " \u00b7 on map: ", mappable_n,
         " \u00b7 sample mode: ", describe_sampling_mode(res$occurrence_sample_mode)
       ),
@@ -7017,9 +7259,9 @@ server <- function(input, output, session) {
           tags$div(tags$strong("Occurrence fetch cap used: "), res$occ_fetch_limit),
           tags$div(tags$strong("Coordinate / geovalid summary: "),
             htmltools::htmlEscape(geovalid_line)),
-          tags$div(tags$strong("Observation records after QA: "), original_kept),
+          tags$div(tags$strong("Coordinate-bearing rows after map collapse: "), original_kept),
           tags$div(tags$strong("Observation records rendered on map: "), qa_kept),
-          tags$div(tags$strong("Observation records removed by QA: "), qa_removed_fmt),
+          tags$div(tags$strong("Rows excluded or collapsed during map preparation: "), qa_removed_fmt),
           tags$div(tags$strong("Map overview status: "),
             htmltools::htmlEscape(map_status)),
           tags$div(tags$strong("Trait records: "),

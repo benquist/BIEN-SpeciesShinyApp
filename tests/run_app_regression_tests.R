@@ -46,6 +46,9 @@ load_app_helpers <- function() {
     "summarize_coordinate_quality",
     "summarize_range_object",
     "read_downloaded_range_sf",
+    "taxon_names_differ",
+    "taxon_confirmation_key",
+    "summarize_evidence_quality",
     "build_reconciliation_table",
     "resolve_filter_profile",
     "classify_occurrence_result",
@@ -62,7 +65,73 @@ load_app_helpers <- function() {
 test_helper_functions <- function() {
   assert_equal(normalize_species_name("pinus   PONDEROSA"), "Pinus ponderosa", "normalize_species_name case normalization failed")
   assert_equal(normalize_species_name("Populus_tremuloides"), "Populus tremuloides", "normalize_species_name underscore normalization failed")
+  assert_equal(normalize_species_name(NA_character_), "", "normalize_species_name must not convert missing values to the literal string NA")
   pass("normalize_species_name works for common case normalization")
+
+  assert_true(!taxon_names_differ("pinus_ponderosa", "Pinus ponderosa"), "Formatting-only taxon differences must not require confirmation")
+  assert_true(taxon_names_differ("Pinus ponderosa", "Pinus jeffreyi"), "Substantive taxon differences must require confirmation")
+  assert_true(!taxon_names_differ("Pinus ponderosa", NA_character_), "Missing returned names must not require confirmation")
+  assert_true(is.na(taxon_confirmation_key("query-1", "Pinus ponderosa", "Pinus ponderosa")), "Exact taxon matches must not create confirmation keys")
+  assert_equal(
+    taxon_confirmation_key("query-1", "Pinus ponderosa", "Pinus jeffreyi"),
+    "query-1||Pinus ponderosa||Pinus jeffreyi",
+    "Taxon confirmation key must identify the query and both names"
+  )
+  assert_true(
+    !identical(
+      taxon_confirmation_key("query-1||run=1", "Pinus ponderosa", "Pinus jeffreyi"),
+      taxon_confirmation_key("query-1||run=2", "Pinus ponderosa", "Pinus jeffreyi")
+    ),
+    "Taxon confirmation must reset for each query execution"
+  )
+  pass("Taxon mismatch confirmation distinguishes substantive name changes")
+
+  reconciliation_occ <- data.frame(scrubbed_species_binomial = "Pinus ponderosa", stringsAsFactors = FALSE)
+  reconciliation <- build_reconciliation_table("Pinus ponderosa", reconciliation_occ, NULL, character(), NULL)
+  assert_equal(reconciliation$matched_name[[1]], "Pinus ponderosa", "Reconciliation must retain the BIEN-returned name")
+  assert_true(is.na(reconciliation$accepted_name[[1]]), "A BIEN-returned name must not be asserted as an accepted name")
+  assert_true(is.na(reconciliation$matched_backbone[[1]]), "The BIEN package must not be asserted as a taxonomy backbone")
+  assert_true(!is.na(reconciliation$bien_package_version[[1]]), "Reconciliation must report the BIEN package version separately")
+  pass("Taxonomic reconciliation avoids unsupported acceptance and backbone claims")
+
+  evidence_occ <- data.frame(
+    latitude = c(10, 10, NA),
+    longitude = c(20, 20, NA),
+    observation_type = c("specimen", "specimen", "plot"),
+    is_introduced = c(0, NA, 1),
+    is_cultivated_observation = c(0, NA, 1),
+    is_geovalid = c(1, NA, 0),
+    date_collected = c("2020-01-01", "", NA),
+    stringsAsFactors = FALSE
+  )
+  evidence_prepared <- prepare_occurrences(evidence_occ, map_point_cap = 1, sample_method = "head")
+  evidence <- summarize_evidence_quality(list(
+    species = "Pinus ponderosa",
+    submitted_name = "Pinus ponderosa",
+    occurrences = evidence_occ,
+    occurrences_prepared = evidence_prepared,
+    occurrences_returned = 5L,
+    occ_strategy = "fallback_relaxed_native",
+    data_profile = "standard",
+    map_point_cap = 1L
+  ), "Pinus ponderosa")
+  assert_equal(evidence$fetched_n, 5L, "Evidence summary fetched count incorrect")
+  assert_equal(evidence$retained_n, 3L, "Evidence summary retained count incorrect")
+  assert_equal(evidence$coordinate_rows_collapsed, 1L, "Evidence summary map-collapse count incorrect")
+  assert_equal(evidence$introduced_unknown_n, 1L, "Evidence summary establishment unknown count incorrect")
+  assert_equal(evidence$dated_n, 1L, "Evidence summary date completeness incorrect")
+  assert_true(isTRUE(evidence$fallback_active), "Evidence summary must expose active fallback")
+  no_coord_evidence <- summarize_evidence_quality(list(
+    species = "Pinus ponderosa",
+    occurrences = data.frame(value = 1:2),
+    occurrences_prepared = prepare_occurrences(data.frame(value = 1:2), map_point_cap = 10),
+    occurrences_returned = 2L,
+    occ_strategy = "strict",
+    data_profile = "standard",
+    map_point_cap = 10L
+  ), "Pinus ponderosa")
+  assert_equal(no_coord_evidence$mapped_n, 0L, "Evidence summary must not count rows without coordinate columns as mapped")
+  pass("Evidence quality summary reports row stages, caps, unknowns, and dates")
 
   df_col <- data.frame(Observation_Type = c("specimen"), stringsAsFactors = FALSE)
   assert_equal(find_first_col(df_col, c("observation_type")), "Observation_Type", "find_first_col case-insensitive lookup failed")
@@ -124,6 +193,27 @@ test_helper_functions <- function() {
   }
   assert_true(grepl(",is_cultivated_observation,is_cultivated_in_region,is_location_cultivated", app_source, fixed = TRUE), "Occurrence SQL must return BIEN cultivation fields")
   assert_true(grepl("if (length(found) > 0) assign(cache_key, found, envir = species_prefix_cache)", app_source, fixed = TRUE), "Autocomplete must cache only successful nonempty lookups")
+  prohibited_claims <- c(
+    "BIEN covers the Western Hemisphere only",
+    "known area and sampling effort",
+    "download the full dataset",
+    "Downloads all occurrence records",
+    "making them suitable for community analyses",
+    "BIEN: Botanical Information and Ecology Network",
+    "post-QA",
+    "Removed by QA",
+    "Observation records after QA"
+  )
+  for (claim in prohibited_claims) {
+    assert_true(!grepl(claim, app_source, fixed = TRUE), paste("Unsupported or inaccurate claim remains:", claim))
+  }
+  assert_true(grepl('tabPanel(\n          "Plot evidence"', app_source, fixed = TRUE), "Plot evidence tab label is missing")
+  assert_true(grepl("Comprehensive coordinate, taxonomic, sampling-bias, and source-record QA is not performed", app_source, fixed = TRUE), "Evidence panel must distinguish comprehensive QA from app map preparation")
+  confirmation_guards <- gregexpr("require_confirmed_taxon()", app_source, fixed = TRUE)[[1]]
+  assert_true(confirmation_guards[[1]] > 0 && length(confirmation_guards) >= 7, "Every download path must require taxon confirmation")
+  trait_script_handlers <- gregexpr("output$download_trait_repro_script <- downloadHandler", app_source, fixed = TRUE)[[1]]
+  assert_true(trait_script_handlers[[1]] > 0 && length(trait_script_handlers) == 1, "Trait reproduction download handler must be defined exactly once")
+  assert_true(grepl("_plot_evidence_dataset.csv", app_source, fixed = TRUE), "Plot-evidence CSV filename is missing")
   pass("Backend NULL handling and reproduction-script filter contracts are guarded")
 
   assert_true(is_bien_connection_error(c("Error connecting to the BIEN database")), "is_bien_connection_error failed")
