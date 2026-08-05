@@ -2,6 +2,22 @@
 
 Tracks prompts that created or changed work under this project folder.
 
+## 2026-08-05 — UX overhaul: filter panel, blank-map overlay, counts button, stale-pulse
+
+**Prompt:** "@M please organize the following: First, I would like to have the 'Load full BIEN counts' button move from the bottom of the front page to near the top... Second, from loading a new species, sometimes the occurrence map returns a blank... Third, can the Data Profile and Filters option be modified?"
+
+**Agents invoked:** @M (supervisor), design-atelier, biodiversity-informatics-checker, EcoInterface (review synthesis done by @M after agent context cleared), coder.
+
+**Changes deployed to bundle `12371930`:**
+- **Button discoverability**: Moved `load_summary_counts` button from below the 620px map to above it in the pre-map status strip; renamed to "Load BIEN database totals"; added static annotation explaining the two counts (profile-filtered + unfiltered); fixed metric card label to "Total BIEN records (unfiltered)".
+- **Blank-map overlay**: Wrapped leafletOutput in `position:relative` container; added `blank_map_overlay_ui` overlay card that appears centered over the map for `filtered_empty` and `no_records` states; card offers one-click "Switch to Standard and re-query" recovery for filtered-empty; for no-records, directs user to check species name with TROPICOS/GBIF links.
+- **Circular-guidance bug fixed**: `no_bien_records` banner previously told users to "Switch to Standard profile" when Standard had already exhausted all 5 fallback tiers; replaced with name-resolution checklist.
+- **Filter panel redesign**: Renamed accordion "Data Profile & Filters" → "Filter Records"; added `open` attribute so it starts expanded; ecological profile labels: Standard → "Probable native-range records", Strict → "NSR-confirmed wild-native only", Custom → "Custom filter combination".
+- **Stale-query pulse**: Query BIEN button gets amber pulsing outline whenever a filter changes; disappears on click; removed static hint text.
+- **6 new regression guards** added to `tests/run_app_regression_tests.R`.
+
+**Validation:** All 22 regression tests passed.
+
 ## 2026-08-04 — GitHub release and shinyapps.io deployment
 
 **Prompt:** "please commit and deploy"
