@@ -3226,17 +3226,34 @@ ui <- fluidPage(
 
       /* ── Stale-query pulse on Query BIEN button ── */
       .bien-query-stale {
-        outline: 2px solid #f59e0b !important;
-        outline-offset: 2px;
-        animation: stale-pulse 1.0s ease-in-out 3;
+        outline: 4px solid #f59e0b !important;
+        outline-offset: 3px;
+        box-shadow: 0 0 0 6px rgba(245, 158, 11, 0.25) !important;
+        animation: stale-pulse 0.9s ease-in-out 4;
       }
       @keyframes stale-pulse {
-        0%   { outline-color: #f59e0b; }
-        50%  { outline-color: #fbbf24; box-shadow: 0 0 0 4px rgba(251,191,36,0.25); }
-        100% { outline-color: #f59e0b; }
+        0%   { outline-color: #f59e0b; box-shadow: 0 0 0 4px rgba(245,158,11,0.15); }
+        50%  { outline-color: #d97706; box-shadow: 0 0 0 10px rgba(217,119,6,0.30); }
+        100% { outline-color: #f59e0b; box-shadow: 0 0 0 4px rgba(245,158,11,0.15); }
       }
       @media (prefers-reduced-motion: reduce) {
         .bien-query-stale { animation: none; }
+      }
+
+      /* ── Load BIEN database totals button — teal so it stands out ── */
+      #load_summary_counts {
+        background: #0891b2;
+        color: #fff;
+        border-color: #0e7490;
+        font-weight: 600;
+      }
+      #load_summary_counts:hover, #load_summary_counts:focus {
+        background: #0e7490;
+        border-color: #155e75;
+        color: #fff;
+      }
+      #load_summary_counts:active {
+        background: #155e75;
       }
 
       @media (min-width: 1400px) {
@@ -3402,14 +3419,14 @@ ui <- fluidPage(
         })();"
       )),
       HTML('<details class="bien-accordion" id="filter-accordion" open><summary class="bien-accordion-summary">&#9656;&thinsp;Filter Records</summary><div class="bien-accordion-body">'),
-      tags$div(style = "font-size:0.88em;font-weight:600;color:#444;margin-bottom:4px;margin-top:2px;", "Record filter preset"),
+      tags$div(style = "font-size:0.88em;font-weight:600;color:#444;margin-bottom:4px;margin-top:2px;", "Which records to include?"),
       radioButtons(
         "data_profile",
         label = NULL,
         choiceNames = list(
-          HTML("<span><strong>Probable native-range records</strong> &mdash; widens automatically if needed</span>"),
-          HTML("<span><strong>NSR-confirmed wild-native only</strong> &mdash; no auto-widening</span>"),
-          HTML("<span><strong>Custom filter combination</strong> &mdash; set your own filters</span>")
+          HTML("<span><strong>Standard</strong> &mdash; likely native occurrences <em style='color:#6b7280;font-size:0.9em;'>(default)</em></span>"),
+          HTML("<span><strong>Strict</strong> &mdash; confirmed wild &amp; native only</span>"),
+          HTML("<span><strong>Custom</strong> &mdash; set your own filters</span>")
         ),
         choiceValues = list("standard", "strict", "custom"),
         selected = "standard"
@@ -3418,19 +3435,18 @@ ui <- fluidPage(
         condition = "input.data_profile === 'standard'",
         tags$div(
           style = "font-size:0.87em;color:#444;background:#f5faf5;border-left:3px solid #2c7a34;padding:5px 8px;margin:0 0 4px 0;border-radius:2px;",
-          "Confirmed non-introduced or NSR-unevaluated records; cultivation-unassessed records included; geovalid.",
+          "Includes all occurrences not flagged as introduced \u2014 plus any not yet reviewed \u2014 and automatically widens the search if few records are found.",
           tags$br(),
-          tags$span(style = "color:#666;", "Filters widen automatically if no records pass. An amber banner appears when widening occurs.")
+          tags$span(style = "color:#2c7a34;font-weight:600;", "Best starting point for most native-range and distribution questions.")
         ),
         tags$details(
           style = "font-size:0.82em;margin:0 0 6px 0;",
-          tags$summary(style = "color:#9ca3af;cursor:pointer;user-select:none;", "\u25b8 Limitations"),
+          tags$summary(style = "color:#9ca3af;cursor:pointer;user-select:none;", "\u25b8 Caveats"),
           tags$ul(
             style = "color:#6b7280;margin:4px 0 0 0;padding-left:16px;line-height:1.6;",
-            tags$li(tags$strong("NSR-unevaluated \u2260 confirmed native."), " Records with is_introduced\u2009=\u2009NULL have not been assessed by the BIEN Native Species Resolver (NSR). They are not confirmed non-introduced and may represent introduced populations."),
-            tags$li(tags$strong("Cultivation-unassessed records are included."), " Standard permits is_cultivated_observation\u2009IS\u2009NULL when the location is not marked cultivated. These are not confirmed wild occurrences."),
-            tags$li(tags$strong("Filters widen step-by-step via a relaxation ladder."), " At maximum relaxation, confirmed-invasive records may be included. The amber banner states which tier was reached."),
-            tags$li(tags$strong("BIEN 4.2 is global in scope, but coverage is uneven."), " Returned records may come from any region; geographic, taxonomic, source, sampling, and NSR assessment coverage vary among regions and taxa. Unevaluated status does not establish nativeness, and missing records do not establish absence.")
+            tags$li(tags$strong("Unreviewed \u2260 confirmed native."), " Records not yet assessed by BIEN may include introduced populations that have not been flagged."),
+            tags$li(tags$strong("Auto-widening includes introduced records at maximum relaxation."), " An amber banner always appears when widening occurs, explaining what changed."),
+            tags$li(tags$strong("BIEN 4.2 is global but coverage is uneven."), " Missing records do not establish absence.")
           )
         )
       ),
@@ -3438,22 +3454,18 @@ ui <- fluidPage(
         condition = "input.data_profile === 'strict'",
         tags$div(
           style = "font-size:0.87em;color:#444;background:#fff8e1;border-left:3px solid #e6a817;padding:5px 8px;margin:0 0 4px 0;border-radius:2px;",
-          tags$span(style = "color:#2c7a34;font-weight:700;", "Strict screened subset."),
+          "Restricted to records explicitly verified as neither introduced nor cultivated. No automatic widening \u2014 if strict screening returns nothing, the map will be blank.",
           tags$br(),
-          tags$strong("NSR-confirmed non-introduced; observation explicitly non-cultivated; locations marked cultivated excluded; geovalid. 500-record cap."),
-          tags$br(),
-          tags$span(style = "color:#666;",
-            "No filter widening. A zero-result message distinguishes filtered records, missing coordinates, and BIEN service errors.")
+          tags$span(style = "color:#b45309;font-weight:600;", "Best for species distribution modeling, conservation assessments, or any workflow requiring traceable provenance. 500-record cap.")
         ),
         tags$details(
           style = "font-size:0.82em;margin:0 0 6px 0;",
-          tags$summary(style = "color:#9ca3af;cursor:pointer;user-select:none;", "\u25b8 Limitations"),
+          tags$summary(style = "color:#9ca3af;cursor:pointer;user-select:none;", "\u25b8 Caveats"),
           tags$ul(
             style = "color:#6b7280;margin:4px 0 0 0;padding-left:16px;line-height:1.6;",
-            tags$li(tags$strong("500-record cap in natural table order."), " Strict returns at most 500 records in database ingestion order \u2014 not spatially random. Apply spatial thinning before SDM use."),
-            tags$li(tags$strong("Centroid status not fully resolved."), " is_centroid\u2009IS\u2009NULL records pass Strict; these may include county-center coordinates with 10\u2013100\u202fkm positional uncertainty."),
-            tags$li(tags$strong("Status screening can yield zero records."), " BIEN and NSR assessment coverage is uneven across regions. Zero screened records does not establish biological absence or absence from the broader BIEN database."),
-            tags$li(tags$strong("Record reproducibility requires the database version."), " Re-running later may return different records. Record version with BIEN_metadata_database_version() in R.")
+            tags$li(tags$strong("Blank map \u2260 species absent."), " Many species have sparse verified records. A blank map here means few records passed the strict criteria \u2014 not that the species is missing from BIEN. Try Standard to see unverified records."),
+            tags$li(tags$strong("500-record cap, not spatially random."), " Apply spatial thinning before SDM use."),
+            tags$li(tags$strong("Coverage is uneven."), " BIEN verification is stronger for some regions and taxa than others.")
           )
         )
       ),
@@ -3461,9 +3473,11 @@ ui <- fluidPage(
         condition = "input.data_profile === 'custom'",
         tags$div(
           style = "font-size:0.87em;color:#444;background:#f0f4ff;border-left:3px solid #4a6fd4;padding:5px 8px;margin:0 0 6px 0;border-radius:2px;",
-          "Set your own introduced-status, cultivation-status, and coordinate-precision filters manually.",
+          "Choose your own combination of introduced-status, cultivation, and coordinate criteria.",
           tags$br(),
-          tags$span(style="color:#888;", "Fallback does not occur in Custom mode. A persistent result banner explains empty or unmappable results.")
+          tags$span(style="color:#4a6fd4;font-weight:600;", "Useful for invasion biology (where introduced records are the target) or any analysis with specific data requirements."),
+          tags$br(),
+          tags$span(style="color:#888;", "No automatic widening. If the map is blank, the banner explains why.")
         )
       ),
 
@@ -4204,6 +4218,19 @@ server <- function(input, output, session) {
     if (nzchar(selected_species) && !identical(selected_species, normalized_species)) {
       update_species_select_input(normalized_species)
     }
+    # Reset filters to Standard defaults whenever the species changes, so
+    # filters from a previous search don't silently carry over to a new one.
+    updateRadioButtons(session, "data_profile", selected = "standard")
+    updateRadioButtons(session, "origin_radio",      selected = "native_or_unknown")
+    updateRadioButtons(session, "cultivation_radio", selected = "wild_only")
+    updateCheckboxInput(session, "only_plot_observations", value = FALSE)
+    updateCheckboxInput(session, "only_geovalid",          value = TRUE)
+    updateCheckboxInput(session, "strict_native_no_unknown", value = FALSE)
+    updateCheckboxInput(session, "strict_wild_no_unknown",   value = FALSE)
+    # Invalidate the summary counts display so the old species' totals
+    # don't persist in the panel until the user explicitly reloads them.
+    summary_cache_nonce(isolate(summary_cache_nonce()) + 1L)
+    session$sendCustomMessage("bien_clear_stale", list())
   }, ignoreInit = TRUE)
 
   species_prefix <- debounce(reactive(input$species_prefix), 350)
@@ -6936,6 +6963,8 @@ server <- function(input, output, session) {
   })
 
   output$query_summary <- renderUI({
+    # Invalidate when species changes (nonce incremented in observeEvent(input$species))
+    summary_cache_nonce()
     res <- bien_results()
     summary_event <- summary_results()
     summary_cache_key <- paste0(res$query_cache_key, "||summary")
