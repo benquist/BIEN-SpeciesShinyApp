@@ -3179,6 +3179,66 @@ ui <- fluidPage(
 
       #occurrence_map { margin-top: 2px; }
 
+      /* ── Load BIEN counts row (above map) ── */
+      .occ-counts-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        flex-wrap: wrap;
+        gap: 8px;
+        padding: 4px 0 2px 0;
+      }
+      .occ-counts-row .btn { font-size: 0.82em; }
+      .occ-counts-inline {
+        font-size: 0.82em;
+        color: #374151;
+        font-weight: 500;
+      }
+      .occ-counts-inline strong { color: #111827; }
+
+      /* ── Blank-map overlay ── */
+      .blank-map-wrap { position: relative; }
+      .blank-map-overlay-wrap {
+        position: absolute;
+        inset: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        z-index: 450;
+        pointer-events: none;
+      }
+      .blank-map-card {
+        background: rgba(255, 255, 255, 0.95);
+        border: 1px solid #fcd34d;
+        border-left: 4px solid #b45309;
+        border-radius: 8px;
+        padding: 20px 28px;
+        max-width: 400px;
+        text-align: center;
+        pointer-events: all;
+        box-shadow: 0 4px 16px rgba(0,0,0,0.10);
+      }
+      .blank-map-card-icon { font-size: 1.4em; margin-bottom: 6px; }
+      .blank-map-card-title { font-size: 0.93em; font-weight: 700; color: #92400e; margin-bottom: 8px; }
+      .blank-map-card-body { font-size: 0.82em; color: #374151; line-height: 1.55; margin-bottom: 14px; text-align: left; }
+      .blank-map-card .btn { font-size: 0.82em; white-space: normal; width: 100%; margin-bottom: 6px; }
+      .blank-map-card-hint { font-size: 0.73em; color: #9ca3af; margin-top: 4px; }
+
+      /* ── Stale-query pulse on Query BIEN button ── */
+      .bien-query-stale {
+        outline: 2px solid #f59e0b !important;
+        outline-offset: 2px;
+        animation: stale-pulse 1.0s ease-in-out 3;
+      }
+      @keyframes stale-pulse {
+        0%   { outline-color: #f59e0b; }
+        50%  { outline-color: #fbbf24; box-shadow: 0 0 0 4px rgba(251,191,36,0.25); }
+        100% { outline-color: #f59e0b; }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .bien-query-stale { animation: none; }
+      }
+
       @media (min-width: 1400px) {
         .col-sm-3 { width: 18%; }
         .col-sm-9 { width: 82%; }
@@ -3341,19 +3401,15 @@ ui <- fluidPage(
           jQuery(initBienTooltips);
         })();"
       )),
-      tags$div(
-        style = "font-size:0.92em;color:#555;margin:6px 0 10px 0;",
-        "Change filters, then click Query BIEN."
-      ),
-      HTML('<details class="bien-accordion"><summary class="bien-accordion-summary">&#9656;&thinsp;Data Profile &amp; Filters</summary><div class="bien-accordion-body">'),
-      tags$div(style = "font-size:0.88em;font-weight:600;color:#444;margin-bottom:4px;margin-top:2px;", "Data profile"),
+      HTML('<details class="bien-accordion" id="filter-accordion" open><summary class="bien-accordion-summary">&#9656;&thinsp;Filter Records</summary><div class="bien-accordion-body">'),
+      tags$div(style = "font-size:0.88em;font-weight:600;color:#444;margin-bottom:4px;margin-top:2px;", "Record filter preset"),
       radioButtons(
         "data_profile",
         label = NULL,
         choiceNames = list(
-          HTML("<span><strong>Standard</strong> &mdash; filters widen if needed</span>"),
-          HTML("<span><strong>Strict</strong> &mdash; explicit status screening, no widening</span>"),
-          HTML("<span><strong>Custom</strong> &mdash; manual control</span>")
+          HTML("<span><strong>Probable native-range records</strong> &mdash; widens automatically if needed</span>"),
+          HTML("<span><strong>NSR-confirmed wild-native only</strong> &mdash; no auto-widening</span>"),
+          HTML("<span><strong>Custom filter combination</strong> &mdash; set your own filters</span>")
         ),
         choiceValues = list("standard", "strict", "custom"),
         selected = "standard"
@@ -3548,6 +3604,9 @@ ui <- fluidPage(
             if (btn) { btn.textContent = 'Copy unavailable'; }
           });
         });
+        Shiny.addCustomMessageHandler('bien_trigger_requery', function(msg) {
+          setTimeout(function() { $('#run_query').click(); }, 180);
+        });
       ")),
       tags$script(HTML("
         Shiny.addCustomMessageHandler('bien_species_suggestions', function(names) {
@@ -3563,6 +3622,25 @@ ui <- fluidPage(
           input.selectize.refreshOptions(false);
           input.selectize.open();
         });
+      ")),
+      tags$script(HTML("
+        /* Stale-query pulse: amber outline on Query BIEN when any filter changes */
+        (function() {
+          var filterSelector = '#data_profile input, #origin_radio input, ' +
+            '#cultivation_radio input, #only_plot_observations, #only_geovalid, ' +
+            '#strict_native_no_unknown, #strict_wild_no_unknown';
+          function markStale() {
+            var btn = document.getElementById('run_query');
+            if (btn) btn.classList.add('bien-query-stale');
+          }
+          function clearStale() {
+            var btn = document.getElementById('run_query');
+            if (btn) btn.classList.remove('bien-query-stale');
+          }
+          $(document).on('change', filterSelector, markStale);
+          $(document).on('click', '#run_query, #feeling_lucky_species', clearStale);
+          Shiny.addCustomMessageHandler('bien_clear_stale', function(msg) { clearStale(); });
+        })();
       ")),
       uiOutput("taxon_match_banner_ui"),
       tabsetPanel(
@@ -3787,23 +3865,36 @@ ui <- fluidPage(
               class = "occ-evidence-grid",
               uiOutput("evidence_quality_ui"),
               uiOutput("flag_composition_ui")
+            ),
+            # Load BIEN totals row — above the map so it is always visible
+            tags$div(
+              class = "occ-counts-row",
+              uiOutput("occ_copy_r_code_ui"),
+              tags$div(
+                actionButton("load_summary_counts", "Load BIEN database totals",
+                  class = "btn-default btn-xs",
+                  title = "Queries the full BIEN database for total record count and source breakdown for this species. Takes 5\u201320 s; does not re-run the map query."
+                ),
+                tags$div(
+                  style = "font-size:0.73em;color:#6b7280;margin-top:2px;",
+                  "Shows profile-filtered count + total unfiltered BIEN records"
+                )
+              )
             )
           ),
-          leafletOutput("occurrence_map", height = 620),
+          # Map wrapped in position:relative for blank-state overlay
+          tags$div(
+            class = "blank-map-wrap",
+            leafletOutput("occurrence_map", height = 620),
+            uiOutput("blank_map_overlay_ui")
+          ),
           tags$div(
             class = "bien-status-stack",
             uiOutput("map_caption_ui"),
-            uiOutput("occ_copy_r_code_ui"),
             uiOutput("overview_notice"),
             uiOutput("slow_query_alert"),
             uiOutput("summary_warn_rail_ui")
           ),
-          tags$p(
-            style = "color:#555;max-width:900px;font-size:0.9em;",
-            "Statistics for the current map. Load full BIEN totals and source fractions on demand."
-          ),
-          actionButton("load_summary_counts", "Load full BIEN counts (slower)", class = "btn-default btn-sm"),
-          br(),
           htmlOutput("query_summary")
         ),
         tabPanel(
@@ -6163,6 +6254,62 @@ server <- function(input, output, session) {
     )
   })
 
+  # ── Blank-map overlay: centered card over the map when result is empty ────
+  output$blank_map_overlay_ui <- renderUI({
+    res <- bien_results()
+    if (is.null(res)) return(NULL)
+    strategy <- if (!is.null(res$occ_strategy) && nzchar(res$occ_strategy)) res$occ_strategy else "strict"
+    result_state <- if (!is.null(res$result_state)) res$result_state else classify_occurrence_result(
+      strategy,
+      if (!is.null(res$data_profile)) res$data_profile else "standard",
+      if (is.data.frame(res$occurrences)) nrow(res$occurrences) else 0L,
+      if (is.data.frame(res$occurrences_prepared$data)) nrow(res$occurrences_prepared$data) else 0L
+    )
+    if (!result_state %in% c("filtered_empty", "no_records")) return(NULL)
+
+    is_filtered <- identical(result_state, "filtered_empty")
+    tags$div(
+      class = "blank-map-overlay-wrap",
+      "aria-live" = "polite",
+      tags$div(
+        class = "blank-map-card",
+        tags$div(class = "blank-map-card-icon", if (is_filtered) "\U0001F50D" else "\u26a0\ufe0f"),
+        tags$div(class = "blank-map-card-title",
+          if (is_filtered) "No records passed the current filter criteria"
+          else "No records found — check the species name"
+        ),
+        tags$div(class = "blank-map-card-body",
+          if (is_filtered) tagList(
+            "This is not evidence of absence. The NSR establishment-status filter may have excluded records that exist in BIEN. ",
+            "To test with automatic filter relaxation, switch to ",
+            tags$strong("Probable native-range records"), " and re-query."
+          ) else tagList(
+            "All five fallback tiers returned zero records. The species name may not have resolved in BIEN/TNRS. ",
+            "Try the accepted name from TROPICOS or GBIF (binomial only, sentence case).",
+            tags$br(),
+            "See the amber banner above for detailed diagnostics."
+          )
+        ),
+        if (is_filtered)
+          actionButton("try_standard_profile_btn", "Switch to Standard and re-query",
+            class = "btn btn-warning btn-sm",
+            "aria-label" = "Switch to Probable native-range records (Standard) profile and re-run the query"
+          ),
+        tags$div(class = "blank-map-card-hint",
+          if (is_filtered) "⚠ Relaxed results may include introduced populations"
+          else "Check the amber banner above for name-resolution guidance"
+        )
+      )
+    )
+  })
+
+  # ── Handle try_standard_profile_btn: switch to Standard and re-query ────
+  observeEvent(input$try_standard_profile_btn, {
+    updateRadioButtons(session, "data_profile", selected = "standard")
+    session$sendCustomMessage("bien_trigger_requery", list())
+    session$sendCustomMessage("bien_clear_stale", list())
+  }, ignoreInit = TRUE)
+
   # ── Taxon match banner: shown across all tabs when BIEN resolves a different name ────
   output$taxon_match_banner_ui <- renderUI({
     res <- bien_results()
@@ -6253,14 +6400,44 @@ server <- function(input, output, session) {
       return(make_banner(
         "fb-banner-amber", "\u26a0\ufe0f",
         "Records found, but none can be mapped",
-        paste0("BIEN returned ", nrow(res$occurrences), " records, but none contain usable coordinates under the effective filters. Tables and downloads remain available.")
+        tagList(
+          "BIEN returned ", nrow(res$occurrences), " records, but none contain usable coordinates under the effective filters. ",
+          "Tables and downloads remain available.",
+          tags$br(),
+          tags$span(style = "font-size:0.9em;",
+            "\u2192 If a BIEN range polygon exists for this species, the ",
+            tags$strong("Range"), " tab will display it as spatial context. ",
+            "\u2192 Check the ", tags$strong("Observations"), " table to inspect raw ",
+            tags$code("latitude"), "/", tags$code("longitude"), " and ",
+            tags$code("is_geovalid"), " fields \u2014 records with is_geovalid\u2009=\u20090 may have coordinates excluded by the geovalid filter."
+          )
+        )
       ))
     }
     if (identical(result_state, "filtered_empty")) {
       return(make_banner(
         "fb-banner-amber", "\u2139\ufe0f",
         "Records may exist, but none passed this profile",
-        "No records met the requested Strict or Custom criteria, and no filters were widened. Try Standard or edit Custom filters; this result is not evidence of biological absence."
+        tagList(
+          tags$strong("This is not evidence of biological absence."),
+          " No records met the active Strict or Custom screening criteria. Common causes: ",
+          tags$ul(style = "margin:6px 0 6px 0;padding-left:18px;line-height:1.6;",
+            tags$li("BIEN\u2019s NSR has evaluated this species\u2019 records and classified them as introduced (is_introduced\u2009=\u20091) \u2014 records exist but are excluded by the establishment-status filter."),
+            tags$li("NSR coverage is uneven; unevaluated records carry is_introduced IS NULL and do not pass Strict."),
+            tags$li("Records exist but lack geovalid coordinates.")
+          ),
+          tags$strong("To check whether BIEN has any records at all: "),
+          "click \u201cLoad BIEN database totals\u201d above the map. ",
+          tags$br(),
+          tags$strong("To explore records without the NSR filter: "),
+          "open ", tags$strong("Filter Records"), " in the sidebar, switch to ",
+          tags$strong("Probable native-range records"), " (Standard), and click ",
+          tags$strong("Query BIEN"), ".",
+          tags$br(),
+          tags$em(style = "font-size:0.88em;color:#92400e;",
+            "\u26a0 Relaxed results will include populations NSR has confirmed as introduced. Do not use for native-range SDM/ENM without post-hoc NSR filtering."
+          )
+        )
       ))
     }
 
@@ -6280,10 +6457,32 @@ server <- function(input, output, session) {
     if (strategy %in% c("none", "no_bien_records")) {
       return(make_banner(
         "fb-banner-amber", "\u26a0\ufe0f",
-        "Query returned no records under the current filters",
+        "No records found after all fallback tiers \u2014 check the species name first",
         tagList(
-          "This can mean (a) BIEN has no records passing these criteria, (b) the species name did not resolve in BIEN\u2019s TNRS, or (c) authorship is needed to disambiguate a homonym. ",
-          "Switch to Standard profile to test the auto-relaxation ladder."
+          "The app tried five progressively relaxed queries for ",
+          tags$strong(htmltools::htmlEscape(as.character(res$species))),
+          ", including queries that accepted any establishment status and county-level centroid coordinates. None returned any records.",
+          tags$br(), tags$br(),
+          tags$strong("Most likely causes (in order of probability):"), tags$br(),
+          tags$ol(style = "margin:6px 0;padding-left:20px;line-height:1.7;",
+            tags$li(tagList(
+              tags$strong("Name not resolved by BIEN/TNRS."),
+              " BIEN normalizes names through TROPICOS. The submitted name must match BIEN\u2019s accepted binomial (sentence case, no authority string). Synonyms and orthographic variants may not resolve. \u2192 Check the ",
+              tags$strong("Observations"), " tab Reconciliation section to see what BIEN returned. \u2192 Try the accepted name from ",
+              tags$a("TROPICOS", href = "https://tropicos.org", target = "_blank"),
+              " or ",
+              tags$a("GBIF Species", href = "https://www.gbif.org/species/search", target = "_blank"),
+              " (binomial only, no authority)."
+            )),
+            tags$li(tagList(
+              tags$strong("Genuinely no BIEN records."),
+              " BIEN 4.2 has strongest coverage for vascular plants of the Americas. Coverage for non-Americas taxa, non-vascular plants, and recently described species is limited."
+            )),
+            tags$li(tagList(
+              tags$strong("Homonym requiring disambiguation."),
+              " If the name is a homonym, BIEN may silently return the wrong concept or no records."
+            ))
+          )
         )
       ))
     }
@@ -6747,9 +6946,9 @@ server <- function(input, output, session) {
     if (is.null(summary_bundle)) {
       summary_bundle <- list(
         total = NA_real_,
-        note = "Not loaded — click 'Load BIEN total counts and source mix (slower)' below to fetch the BIEN total count for this species.",
+        note = "Not loaded \u2014 click \u2018Load BIEN database totals\u2019 above the map to fetch the BIEN total count for this species.",
         total_all = NA_real_,
-        total_all_note = "Not loaded — click 'Load BIEN total counts and source mix (slower)' below to fetch.",
+        total_all_note = "Not loaded \u2014 click \u2018Load BIEN database totals\u2019 above the map to fetch.",
         source_mix = NULL,
         loaded = FALSE
       )
@@ -7091,7 +7290,7 @@ server <- function(input, output, session) {
       # Metric cards
       tags$div(class = "metric-row",
         make_metric_card(format(occ_n, big.mark = ","),    "Records in app",   "matching current filters"),
-        make_metric_card(total_all_fmt,                    "Total BIEN",        "unfiltered (load above)"),
+        make_metric_card(total_all_fmt,                    "Total BIEN records (unfiltered)", "all records, no filters applied"),
         make_metric_card(format(mappable_n, big.mark = ","), "Points on map",  "after app map preparation"),
         make_metric_card(qa_removed_fmt,                   "Excluded/collapsed for map", "invalid coordinates + coordinate-equivalent rows")
       ),
