@@ -4188,30 +4188,30 @@ server <- function(input, output, session) {
     )
   }
 
-  session$onFlushed(function() {
-    # Initialise the startup species only after the selectize control exists in
-    # the browser so the visible Species name field reliably shows the startup
-    # taxon instead of an empty box while the preloaded startup map is present.
-    # Also honour ?species= and ?tab= URL parameters for shareable bookmarks.
-    url_query <- parseQueryString(session$clientData$url_search)
+  observeEvent(TRUE, {
+    # Capture URL params from reactive clientData inside a reactive observer, then
+    # apply UI updates after first flush so the selectize control is ready.
+    url_query <- parseQueryString(isolate(session$clientData$url_search))
     species_from_url <- url_query[["species"]]
     tab_from_url     <- url_query[["tab"]]
 
-    if (!is.null(species_from_url) && nzchar(species_from_url)) {
-      sp_decoded <- utils::URLdecode(species_from_url)
-      sp_clean   <- normalize_species_name(sp_decoded)
-      update_species_select_input(sp_clean, choices = startup_species_suggestions)
-    } else {
-      update_species_select_input(STARTUP_SPECIES, choices = startup_species_suggestions)
-    }
+    session$onFlushed(function() {
+      if (!is.null(species_from_url) && nzchar(species_from_url)) {
+        sp_decoded <- utils::URLdecode(species_from_url)
+        sp_clean   <- normalize_species_name(sp_decoded)
+        update_species_select_input(sp_clean, choices = startup_species_suggestions)
+      } else {
+        update_species_select_input(STARTUP_SPECIES, choices = startup_species_suggestions)
+      }
 
-    valid_tabs <- c("About & Help", "Occurrence", "Plot evidence", "Observations",
-                    "Traits", "Range", "Download", "Explore this species", "Temporal Distribution")
-    if (!is.null(tab_from_url) && nzchar(tab_from_url) &&
-        utils::URLdecode(tab_from_url) %in% valid_tabs) {
-      updateTabsetPanel(session, "main_tabs",
-                        selected = utils::URLdecode(tab_from_url))
-    }
+      valid_tabs <- c("About & Help", "Occurrence", "Plot evidence", "Observations",
+                      "Traits", "Range", "Download", "Explore this species", "Temporal Distribution")
+      if (!is.null(tab_from_url) && nzchar(tab_from_url) &&
+          utils::URLdecode(tab_from_url) %in% valid_tabs) {
+        updateTabsetPanel(session, "main_tabs",
+                          selected = utils::URLdecode(tab_from_url))
+      }
+    }, once = TRUE)
   }, once = TRUE)
 
   observeEvent(input$species, {
