@@ -2,6 +2,17 @@
 
 Tracks prompts that created or changed work under this project folder.
 
+## 2026-08-05 — Startup species field now visibly matches the startup map
+
+**Prompt:** "When loading the app from the start. The new user should see Pinus teocote and that name should be seen under the 'Species name' at the top. Each time the app loads with Pinus teocote in the map the species name text should also read 'Pinus teocote'."
+
+**Changes deployed to bundle `12372089`:**
+- **Startup Species name field fix**: moved the initial `update_species_select_input()` call from an immediate observer to `session$onFlushed(..., once = TRUE)` so the browser-side selectize control exists before the startup value is applied.
+- **Visible startup consistency**: the app now reliably shows `Pinus teocote` in the sidebar `Species name` field whenever the startup map/data load for `Pinus teocote`.
+- **Regression guard**: added source-level checks ensuring the startup species remains both the UI default (`selected = STARTUP_SPECIES`) and the post-flush re-applied value.
+
+**Validation:** All 22 regression tests passed. Commit `a6c6042`.
+
 ## 2026-08-05 — UX refinements: plain-English labels, filter reset, teal button, bigger stale pulse
 
 **Prompt:** "Make the flashing around the 'Query BIEN' after you change a Record filter present more obvious. Bigger flashing? Second, the text around the Record Filter present options is awkward. We need simpler phrasing in plain-english... Also, we should rethink the phrasing for 'Record Filter preset'. Noone will know what that is. Lastly, if the user changes the search and filter presets and then searches for another species, the filters should go back to the default settings. The options to load bien database totals should also go back to default settings. Can this button be a different color too."
