@@ -4188,8 +4188,10 @@ server <- function(input, output, session) {
     )
   }
 
-  observeEvent(TRUE, {
-    # Use globally preloaded suggestions (loaded once at app launch) — no per-session BIEN call needed.
+  session$onFlushed(function() {
+    # Initialise the startup species only after the selectize control exists in
+    # the browser so the visible Species name field reliably shows the startup
+    # taxon instead of an empty box while the preloaded startup map is present.
     # Also honour ?species= and ?tab= URL parameters for shareable bookmarks.
     url_query <- parseQueryString(session$clientData$url_search)
     species_from_url <- url_query[["species"]]

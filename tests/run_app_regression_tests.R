@@ -193,6 +193,10 @@ test_helper_functions <- function() {
   }
   assert_true(grepl(",is_cultivated_observation,is_cultivated_in_region,is_location_cultivated", app_source, fixed = TRUE), "Occurrence SQL must return BIEN cultivation fields")
   assert_true(grepl("if (length(found) > 0) assign(cache_key, found, envir = species_prefix_cache)", app_source, fixed = TRUE), "Autocomplete must cache only successful nonempty lookups")
+  assert_true(grepl('selected = STARTUP_SPECIES', app_source, fixed = TRUE), "Species input must visibly default to the startup species")
+  assert_true(grepl('session$onFlushed(function() {', app_source, fixed = TRUE) &&
+                grepl('update_species_select_input(STARTUP_SPECIES, choices = startup_species_suggestions)', app_source, fixed = TRUE),
+              "Startup species must be re-applied after the initial UI flush")
   prohibited_claims <- c(
     "BIEN covers the Western Hemisphere only",
     "known area and sampling effort",
