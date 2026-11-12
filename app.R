@@ -631,7 +631,12 @@ resolve_filter_profile <- function(input) {
     return(list(
       profile = "standard",
       allow_fallback = TRUE,
-      use_default_profile = FALSE,
+      # F-audit: "standard" is the app's pre-selected, auto-relaxing profile —
+      # it must be TRUE here so downstream fallback-disclosure warnings and
+      # export labels ("conservative default" vs "custom") are reachable and
+      # correctly attributed (they previously fired only for "strict", which
+      # never fallbacks, making them dead code).
+      use_default_profile = TRUE,
       use_introduced_filter = TRUE,
       natives_only = TRUE,
       strict_native_no_unknown = FALSE,
@@ -651,7 +656,9 @@ resolve_filter_profile <- function(input) {
     return(list(
       profile = "strict",
       allow_fallback = FALSE,
-      use_default_profile = TRUE,
+      # F-audit: strict is the explicit, no-fallback opt-in profile, not the
+      # app's default — see corresponding note on the "standard" branch above.
+      use_default_profile = FALSE,
       use_introduced_filter = TRUE,
       natives_only = TRUE,
       strict_native_no_unknown = TRUE,
@@ -995,6 +1002,19 @@ query_occurrence_with_fallback <- function(species_name, input, occ_limit, occ_p
   )
 }
 
+# F-audit: precise 3-way filter-profile label for exports/summaries. Distinct
+# from the binary use_default_profile flag (which only gates whether the
+# fallback ladder was available) so "strict" is never mislabeled as "custom".
+filter_profile_label <- function(profile) {
+  switch(
+    if (is.null(profile) || is.na(profile)) "standard" else as.character(profile),
+    standard = "conservative default (Standard)",
+    strict = "Strict (no auto-fallback)",
+    custom = "Custom",
+    "Custom"
+  )
+}
+
 classify_occurrence_result <- function(strategy, profile, occurrence_n, mappable_n) {
   if (identical(strategy, "backend_timeout_error")) return("timeout")
   if (strategy %in% c("backend_connection_error", "backend_query_error")) return("backend_error")
@@ -1300,7 +1320,7 @@ summarize_coordinate_quality <- function(occ_info) {
 
 # Run a BIEN-side COUNT(*) query so the app can report how many matching occurrence
 # records exist in BIEN without downloading all rows into the Shiny session.
-count_occurrence_records <- function(species_name, cultivated = FALSE, natives_only = TRUE, only_geovalid = TRUE, timeout_sec = 30, strict_no_unknown = FALSE, strict_wild_no_unknown = FALSE) {
+count_occurrence_records <- function(species_name, cultivated = FALSE, natives_only = TRUE, only_geovalid = TRUE, timeout_sec = 30, strict_no_unknown = FALSE, strict_wild_no_unknown = FALSE, allow_centroids = FALSE) {
   count_res <- safe_bien_call({
     cult_clause <- if (isTRUE(strict_wild_no_unknown) && !isTRUE(cultivated)) {
       "AND is_cultivated_observation = 0 AND (is_location_cultivated IS NULL OR is_location_cultivated = FALSE) "
@@ -1311,6 +1331,14 @@ count_occurrence_records <- function(species_name, cultivated = FALSE, natives_o
     natives_ <- natives_check_with_null_fallback(natives_only, strict_no_unknown = strict_no_unknown)
     observation_ <- BIEN:::.observation_check(TRUE)
     geovalid_ <- BIEN:::.geovalid_check(only_geovalid)
+    # F-audit: only exclude centroid/county-georeferenced rows when the caller
+    # has not explicitly asked to allow them (matches the fallback_allow_centroids
+    # tier used by the actual occurrence query, so counts stay consistent with it).
+    centroid_clause <- if (isTRUE(allow_centroids)) {
+      ""
+    } else {
+      "AND (georef_protocol is NULL OR georef_protocol<>'county centroid') AND (is_centroid IS NULL OR is_centroid=0)"
+    }
 
     count_query <- paste(
       "SELECT COUNT(*) AS bien_total_records",
@@ -1318,8 +1346,7 @@ count_occurrence_records <- function(species_name, cultivated = FALSE, natives_o
       "WHERE scrubbed_species_binomial in (", paste(sql_quote_literal(species_name), collapse = ", "), ")",
       cult_clause, newworld_$query, natives_$query, observation_$query, geovalid_$query,
       "AND higher_plant_group NOT IN ('Algae','Bacteria','Fungi')",
-      "AND (georef_protocol is NULL OR georef_protocol<>'county centroid')",
-      "AND (is_centroid IS NULL OR is_centroid=0)",
+      centroid_clause,
       "AND scrubbed_species_binomial IS NOT NULL ;"
     )
 
@@ -1344,7 +1371,7 @@ count_occurrence_records <- function(species_name, cultivated = FALSE, natives_o
 # Run a BIEN-side grouped count query so the Overview can report what fraction of
 # the total matching occurrence records appear to be specimens, iNaturalist records,
 # plots/surveys, trait-linked rows, or other provenance classes.
-count_occurrence_source_mix <- function(species_name, cultivated = FALSE, natives_only = TRUE, only_geovalid = TRUE, timeout_sec = 30, strict_no_unknown = FALSE, strict_wild_no_unknown = FALSE) {
+count_occurrence_source_mix <- function(species_name, cultivated = FALSE, natives_only = TRUE, only_geovalid = TRUE, timeout_sec = 30, strict_no_unknown = FALSE, strict_wild_no_unknown = FALSE, allow_centroids = FALSE) {
   cult_clause <- if (isTRUE(strict_wild_no_unknown) && !isTRUE(cultivated)) {
     "AND is_cultivated_observation = 0 AND (is_location_cultivated IS NULL OR is_location_cultivated = FALSE) "
   } else {
@@ -1354,6 +1381,13 @@ count_occurrence_source_mix <- function(species_name, cultivated = FALSE, native
   natives_ <- natives_check_with_null_fallback(natives_only, strict_no_unknown = strict_no_unknown)
   observation_ <- BIEN:::.observation_check(TRUE)
   geovalid_ <- BIEN:::.geovalid_check(only_geovalid)
+  # F-audit: keep centroid handling consistent with count_occurrence_records()
+  # and with the fallback_allow_centroids tier of the actual occurrence query.
+  centroid_clause <- if (isTRUE(allow_centroids)) {
+    ""
+  } else {
+    "  AND (georef_protocol is NULL OR georef_protocol<>'county centroid')\n  AND (is_centroid IS NULL OR is_centroid=0)"
+  }
 
   build_mix_query <- function(combined_sql) {
     # Wrap in a LIMIT-capped subquery to prevent multi-minute full-table GROUP BY
@@ -1372,8 +1406,7 @@ count_occurrence_source_mix <- function(species_name, cultivated = FALSE, native
       "  WHERE scrubbed_species_binomial in (", paste(sql_quote_literal(species_name), collapse = ", "), ")",
       cult_clause, newworld_$query, natives_$query, observation_$query, geovalid_$query,
       "  AND higher_plant_group NOT IN ('Algae','Bacteria','Fungi')",
-      "  AND (georef_protocol is NULL OR georef_protocol<>'county centroid')",
-      "  AND (is_centroid IS NULL OR is_centroid=0)",
+      centroid_clause,
       "  AND scrubbed_species_binomial IS NOT NULL",
       "  LIMIT 50000",
       ") AS mix_subquery",
@@ -1919,7 +1952,7 @@ summarize_evidence_quality <- function(res, matched_name = NA_character_) {
   )
 }
 
-build_reconciliation_table <- function(species_name, occ, traits, query_errors, range_obj) {
+build_reconciliation_table <- function(species_name, occ, traits, query_errors, range_obj, profile = "standard") {
   has_real_error <- function(x) {
     if (length(x) == 0) return(FALSE)
     error_patterns <- c(
@@ -1955,6 +1988,12 @@ build_reconciliation_table <- function(species_name, occ, traits, query_errors, 
     matched_status = case_when(
       is.data.frame(occ) && nrow(occ) > 0 ~ "matched",
       query_has_error ~ "error",
+      # F-audit: distinguish "screening filtered every record to zero" (strict/
+      # custom profiles never auto-relax) from "no records matched this name at
+      # all, even after maximal fallback" (standard profile's auto-relaxation
+      # ladder was exhausted). Conflating these as one "no_records" label hid
+      # cases where BIEN does have records but they were all screened out.
+      profile %in% c("strict", "custom") ~ "filtered_empty",
       TRUE ~ "no_records"
     ),
     accepted_name = NA_character_,
@@ -3179,6 +3218,83 @@ ui <- fluidPage(
 
       #occurrence_map { margin-top: 2px; }
 
+      /* ── Load BIEN counts row (above map) ── */
+      .occ-counts-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        flex-wrap: wrap;
+        gap: 8px;
+        padding: 4px 0 2px 0;
+      }
+      .occ-counts-row .btn { font-size: 0.82em; }
+      .occ-counts-inline {
+        font-size: 0.82em;
+        color: #374151;
+        font-weight: 500;
+      }
+      .occ-counts-inline strong { color: #111827; }
+
+      /* ── Blank-map overlay ── */
+      .blank-map-wrap { position: relative; }
+      .blank-map-overlay-wrap {
+        position: absolute;
+        inset: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        z-index: 450;
+        pointer-events: none;
+      }
+      .blank-map-card {
+        background: rgba(255, 255, 255, 0.95);
+        border: 1px solid #fcd34d;
+        border-left: 4px solid #b45309;
+        border-radius: 8px;
+        padding: 20px 28px;
+        max-width: 400px;
+        text-align: center;
+        pointer-events: all;
+        box-shadow: 0 4px 16px rgba(0,0,0,0.10);
+      }
+      .blank-map-card-icon { font-size: 1.4em; margin-bottom: 6px; }
+      .blank-map-card-title { font-size: 0.93em; font-weight: 700; color: #92400e; margin-bottom: 8px; }
+      .blank-map-card-body { font-size: 0.82em; color: #374151; line-height: 1.55; margin-bottom: 14px; text-align: left; }
+      .blank-map-card .btn { font-size: 0.82em; white-space: normal; width: 100%; margin-bottom: 6px; }
+      .blank-map-card-hint { font-size: 0.73em; color: #9ca3af; margin-top: 4px; }
+
+      /* ── Stale-query pulse on Query BIEN button ── */
+      .bien-query-stale {
+        outline: 4px solid #f59e0b !important;
+        outline-offset: 3px;
+        box-shadow: 0 0 0 6px rgba(245, 158, 11, 0.25) !important;
+        animation: stale-pulse 0.9s ease-in-out 4;
+      }
+      @keyframes stale-pulse {
+        0%   { outline-color: #f59e0b; box-shadow: 0 0 0 4px rgba(245,158,11,0.15); }
+        50%  { outline-color: #d97706; box-shadow: 0 0 0 10px rgba(217,119,6,0.30); }
+        100% { outline-color: #f59e0b; box-shadow: 0 0 0 4px rgba(245,158,11,0.15); }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .bien-query-stale { animation: none; }
+      }
+
+      /* ── Load BIEN database totals button — teal so it stands out ── */
+      #load_summary_counts {
+        background: #0891b2;
+        color: #fff;
+        border-color: #0e7490;
+        font-weight: 600;
+      }
+      #load_summary_counts:hover, #load_summary_counts:focus {
+        background: #0e7490;
+        border-color: #155e75;
+        color: #fff;
+      }
+      #load_summary_counts:active {
+        background: #155e75;
+      }
+
       @media (min-width: 1400px) {
         .col-sm-3 { width: 18%; }
         .col-sm-9 { width: 82%; }
@@ -3341,19 +3457,15 @@ ui <- fluidPage(
           jQuery(initBienTooltips);
         })();"
       )),
-      tags$div(
-        style = "font-size:0.92em;color:#555;margin:6px 0 10px 0;",
-        "Change filters, then click Query BIEN."
-      ),
-      HTML('<details class="bien-accordion"><summary class="bien-accordion-summary">&#9656;&thinsp;Data Profile &amp; Filters</summary><div class="bien-accordion-body">'),
-      tags$div(style = "font-size:0.88em;font-weight:600;color:#444;margin-bottom:4px;margin-top:2px;", "Data profile"),
+      HTML('<details class="bien-accordion" id="filter-accordion" open><summary class="bien-accordion-summary">&#9656;&thinsp;Filter Records</summary><div class="bien-accordion-body">'),
+      tags$div(style = "font-size:0.88em;font-weight:600;color:#444;margin-bottom:4px;margin-top:2px;", "Which records to include?"),
       radioButtons(
         "data_profile",
         label = NULL,
         choiceNames = list(
-          HTML("<span><strong>Standard</strong> &mdash; filters widen if needed</span>"),
-          HTML("<span><strong>Strict</strong> &mdash; explicit status screening, no widening</span>"),
-          HTML("<span><strong>Custom</strong> &mdash; manual control</span>")
+          HTML("<span><strong>Standard</strong> &mdash; likely native occurrences <em style='color:#6b7280;font-size:0.9em;'>(default)</em></span>"),
+          HTML("<span><strong>Strict</strong> &mdash; confirmed wild &amp; native only</span>"),
+          HTML("<span><strong>Custom</strong> &mdash; set your own filters</span>")
         ),
         choiceValues = list("standard", "strict", "custom"),
         selected = "standard"
@@ -3362,19 +3474,18 @@ ui <- fluidPage(
         condition = "input.data_profile === 'standard'",
         tags$div(
           style = "font-size:0.87em;color:#444;background:#f5faf5;border-left:3px solid #2c7a34;padding:5px 8px;margin:0 0 4px 0;border-radius:2px;",
-          "Confirmed non-introduced or NSR-unevaluated records; cultivation-unassessed records included; geovalid.",
+          "Includes all occurrences not flagged as introduced \u2014 plus any not yet reviewed \u2014 and automatically widens the search if few records are found.",
           tags$br(),
-          tags$span(style = "color:#666;", "Filters widen automatically if no records pass. An amber banner appears when widening occurs.")
+          tags$span(style = "color:#2c7a34;font-weight:600;", "Best starting point for most native-range and distribution questions.")
         ),
         tags$details(
           style = "font-size:0.82em;margin:0 0 6px 0;",
-          tags$summary(style = "color:#9ca3af;cursor:pointer;user-select:none;", "\u25b8 Limitations"),
+          tags$summary(style = "color:#9ca3af;cursor:pointer;user-select:none;", "\u25b8 Caveats"),
           tags$ul(
             style = "color:#6b7280;margin:4px 0 0 0;padding-left:16px;line-height:1.6;",
-            tags$li(tags$strong("NSR-unevaluated \u2260 confirmed native."), " Records with is_introduced\u2009=\u2009NULL have not been assessed by the BIEN Native Species Resolver (NSR). They are not confirmed non-introduced and may represent introduced populations."),
-            tags$li(tags$strong("Cultivation-unassessed records are included."), " Standard permits is_cultivated_observation\u2009IS\u2009NULL when the location is not marked cultivated. These are not confirmed wild occurrences."),
-            tags$li(tags$strong("Filters widen step-by-step via a relaxation ladder."), " At maximum relaxation, confirmed-invasive records may be included. The amber banner states which tier was reached."),
-            tags$li(tags$strong("BIEN 4.2 is global in scope, but coverage is uneven."), " Returned records may come from any region; geographic, taxonomic, source, sampling, and NSR assessment coverage vary among regions and taxa. Unevaluated status does not establish nativeness, and missing records do not establish absence.")
+            tags$li(tags$strong("Unreviewed \u2260 confirmed native."), " Records not yet assessed by BIEN may include introduced populations that have not been flagged."),
+            tags$li(tags$strong("Auto-widening includes introduced records at maximum relaxation."), " An amber banner always appears when widening occurs, explaining what changed."),
+            tags$li(tags$strong("BIEN 4.2 is global but coverage is uneven."), " Missing records do not establish absence.")
           )
         )
       ),
@@ -3382,22 +3493,18 @@ ui <- fluidPage(
         condition = "input.data_profile === 'strict'",
         tags$div(
           style = "font-size:0.87em;color:#444;background:#fff8e1;border-left:3px solid #e6a817;padding:5px 8px;margin:0 0 4px 0;border-radius:2px;",
-          tags$span(style = "color:#2c7a34;font-weight:700;", "Strict screened subset."),
+          "Restricted to records explicitly verified as neither introduced nor cultivated. No automatic widening \u2014 if strict screening returns nothing, the map will be blank.",
           tags$br(),
-          tags$strong("NSR-confirmed non-introduced; observation explicitly non-cultivated; locations marked cultivated excluded; geovalid. 500-record cap."),
-          tags$br(),
-          tags$span(style = "color:#666;",
-            "No filter widening. A zero-result message distinguishes filtered records, missing coordinates, and BIEN service errors.")
+          tags$span(style = "color:#b45309;font-weight:600;", "Best for species distribution modeling, conservation assessments, or any workflow requiring traceable provenance. 500-record cap.")
         ),
         tags$details(
           style = "font-size:0.82em;margin:0 0 6px 0;",
-          tags$summary(style = "color:#9ca3af;cursor:pointer;user-select:none;", "\u25b8 Limitations"),
+          tags$summary(style = "color:#9ca3af;cursor:pointer;user-select:none;", "\u25b8 Caveats"),
           tags$ul(
             style = "color:#6b7280;margin:4px 0 0 0;padding-left:16px;line-height:1.6;",
-            tags$li(tags$strong("500-record cap in natural table order."), " Strict returns at most 500 records in database ingestion order \u2014 not spatially random. Apply spatial thinning before SDM use."),
-            tags$li(tags$strong("Centroid status not fully resolved."), " is_centroid\u2009IS\u2009NULL records pass Strict; these may include county-center coordinates with 10\u2013100\u202fkm positional uncertainty."),
-            tags$li(tags$strong("Status screening can yield zero records."), " BIEN and NSR assessment coverage is uneven across regions. Zero screened records does not establish biological absence or absence from the broader BIEN database."),
-            tags$li(tags$strong("Record reproducibility requires the database version."), " Re-running later may return different records. Record version with BIEN_metadata_database_version() in R.")
+            tags$li(tags$strong("Blank map \u2260 species absent."), " Many species have sparse verified records. A blank map here means few records passed the strict criteria \u2014 not that the species is missing from BIEN. Try Standard to see unverified records."),
+            tags$li(tags$strong("500-record cap, not spatially random."), " Apply spatial thinning before SDM use."),
+            tags$li(tags$strong("Coverage is uneven."), " BIEN verification is stronger for some regions and taxa than others.")
           )
         )
       ),
@@ -3405,9 +3512,11 @@ ui <- fluidPage(
         condition = "input.data_profile === 'custom'",
         tags$div(
           style = "font-size:0.87em;color:#444;background:#f0f4ff;border-left:3px solid #4a6fd4;padding:5px 8px;margin:0 0 6px 0;border-radius:2px;",
-          "Set your own introduced-status, cultivation-status, and coordinate-precision filters manually.",
+          "Choose your own combination of introduced-status, cultivation, and coordinate criteria.",
           tags$br(),
-          tags$span(style="color:#888;", "Fallback does not occur in Custom mode. A persistent result banner explains empty or unmappable results.")
+          tags$span(style="color:#4a6fd4;font-weight:600;", "Useful for invasion biology (where introduced records are the target) or any analysis with specific data requirements."),
+          tags$br(),
+          tags$span(style="color:#888;", "No automatic widening. If the map is blank, the banner explains why.")
         )
       ),
 
@@ -3548,6 +3657,9 @@ ui <- fluidPage(
             if (btn) { btn.textContent = 'Copy unavailable'; }
           });
         });
+        Shiny.addCustomMessageHandler('bien_trigger_requery', function(msg) {
+          setTimeout(function() { $('#run_query').click(); }, 180);
+        });
       ")),
       tags$script(HTML("
         Shiny.addCustomMessageHandler('bien_species_suggestions', function(names) {
@@ -3563,6 +3675,25 @@ ui <- fluidPage(
           input.selectize.refreshOptions(false);
           input.selectize.open();
         });
+      ")),
+      tags$script(HTML("
+        /* Stale-query pulse: amber outline on Query BIEN when any filter changes */
+        (function() {
+          var filterSelector = '#data_profile input, #origin_radio input, ' +
+            '#cultivation_radio input, #only_plot_observations, #only_geovalid, ' +
+            '#strict_native_no_unknown, #strict_wild_no_unknown';
+          function markStale() {
+            var btn = document.getElementById('run_query');
+            if (btn) btn.classList.add('bien-query-stale');
+          }
+          function clearStale() {
+            var btn = document.getElementById('run_query');
+            if (btn) btn.classList.remove('bien-query-stale');
+          }
+          $(document).on('change', filterSelector, markStale);
+          $(document).on('click', '#run_query, #feeling_lucky_species', clearStale);
+          Shiny.addCustomMessageHandler('bien_clear_stale', function(msg) { clearStale(); });
+        })();
       ")),
       uiOutput("taxon_match_banner_ui"),
       tabsetPanel(
@@ -3787,23 +3918,36 @@ ui <- fluidPage(
               class = "occ-evidence-grid",
               uiOutput("evidence_quality_ui"),
               uiOutput("flag_composition_ui")
+            ),
+            # Load BIEN totals row — above the map so it is always visible
+            tags$div(
+              class = "occ-counts-row",
+              uiOutput("occ_copy_r_code_ui"),
+              tags$div(
+                actionButton("load_summary_counts", "Load BIEN database totals",
+                  class = "btn-default btn-xs",
+                  title = "Queries the full BIEN database for total record count and source breakdown for this species. Takes 5\u201320 s; does not re-run the map query."
+                ),
+                tags$div(
+                  style = "font-size:0.73em;color:#6b7280;margin-top:2px;",
+                  "Shows profile-filtered count + total unfiltered BIEN records"
+                )
+              )
             )
           ),
-          leafletOutput("occurrence_map", height = 620),
+          # Map wrapped in position:relative for blank-state overlay
+          tags$div(
+            class = "blank-map-wrap",
+            leafletOutput("occurrence_map", height = 620),
+            uiOutput("blank_map_overlay_ui")
+          ),
           tags$div(
             class = "bien-status-stack",
             uiOutput("map_caption_ui"),
-            uiOutput("occ_copy_r_code_ui"),
             uiOutput("overview_notice"),
             uiOutput("slow_query_alert"),
             uiOutput("summary_warn_rail_ui")
           ),
-          tags$p(
-            style = "color:#555;max-width:900px;font-size:0.9em;",
-            "Statistics for the current map. Load full BIEN totals and source fractions on demand."
-          ),
-          actionButton("load_summary_counts", "Load full BIEN counts (slower)", class = "btn-default btn-sm"),
-          br(),
           htmlOutput("query_summary")
         ),
         tabPanel(
@@ -4113,6 +4257,19 @@ server <- function(input, output, session) {
     if (nzchar(selected_species) && !identical(selected_species, normalized_species)) {
       update_species_select_input(normalized_species)
     }
+    # Reset filters to Standard defaults whenever the species changes, so
+    # filters from a previous search don't silently carry over to a new one.
+    updateRadioButtons(session, "data_profile", selected = "standard")
+    updateRadioButtons(session, "origin_radio",      selected = "native_or_unknown")
+    updateRadioButtons(session, "cultivation_radio", selected = "wild_only")
+    updateCheckboxInput(session, "only_plot_observations", value = FALSE)
+    updateCheckboxInput(session, "only_geovalid",          value = TRUE)
+    updateCheckboxInput(session, "strict_native_no_unknown", value = FALSE)
+    updateCheckboxInput(session, "strict_wild_no_unknown",   value = FALSE)
+    # Invalidate the summary counts display so the old species' totals
+    # don't persist in the panel until the user explicitly reloads them.
+    summary_cache_nonce(isolate(summary_cache_nonce()) + 1L)
+    session$sendCustomMessage("bien_clear_stale", list())
   }, ignoreInit = TRUE)
 
   species_prefix <- debounce(reactive(input$species_prefix), 350)
@@ -4211,7 +4368,7 @@ server <- function(input, output, session) {
     occ_fetch_limit <- if (is.null(res$occ_fetch_limit) || !is.finite(res$occ_fetch_limit)) max(occ_limit, 1000) else as.integer(res$occ_fetch_limit)
     exclude_human_obs <- isTRUE(res$exclude_human_observation_records)
     only_plot_obs <- isTRUE(res$only_plot_observations)
-    filter_profile_txt <- if (isTRUE(res$use_default_filter_profile)) "conservative default" else "custom"
+    filter_profile_txt <- filter_profile_label(res$data_profile)
 
     # Plain-English strategy description for the script header
     strategy_plain <- switch(
@@ -5187,7 +5344,7 @@ server <- function(input, output, session) {
       incProgress(0.85, detail = "Preparing map and QA summary")
       occ_prepared <- if (is.data.frame(occ)) prepare_occurrences(occ, map_point_cap = map_point_cap, sample_method = display_sampling_method) else list(data = NULL, lat_col = NULL, lon_col = NULL, qa = list(total = 0, coord_valid = 0, kept = 0, removed = 0, removed_invalid = 0, duplicates_removed = 0), map_cap_applied = FALSE, map_cap = map_point_cap, original_kept = 0, sample_method = display_sampling_method)
       family_name <- extract_primary_value(occ, c("scrubbed_family", "family", "verbatim_family"))
-      reconciliation_tbl <- build_reconciliation_table(species_input, occ, NULL, query_errors, NULL)
+      reconciliation_tbl <- build_reconciliation_table(species_input, occ, NULL, query_errors, NULL, profile = filter_cfg$profile)
 
       incProgress(1, detail = "Done")
 
@@ -5381,11 +5538,20 @@ server <- function(input, output, session) {
     }
 
     res <- bien_results()
-    if (is.null(res) || !is_bien_connection_error(res$query_errors)) {
+    # F-audit: the retry button previously only appeared for connection errors,
+    # leaving BIEN timeouts (a distinct, also-retryable failure mode) with no
+    # recovery action in the UI.
+    is_timeout <- is_bien_timeout_error(res$query_errors)
+    is_connection <- is_bien_connection_error(res$query_errors)
+    if (is.null(res) || !(is_connection || is_timeout)) {
       return(NULL)
     }
 
-    actionButton("retry_bien", "Retry BIEN connection (with backoff)", class = "btn-warning btn-sm")
+    actionButton(
+      "retry_bien",
+      if (is_timeout) "Retry BIEN query (previous attempt timed out)" else "Retry BIEN connection (with backoff)",
+      class = "btn-warning btn-sm"
+    )
   })
 
   observeEvent(bien_results(), {
@@ -5405,7 +5571,19 @@ server <- function(input, output, session) {
         write.csv(data.frame(message = "No occurrence dataset available for download."), file, row.names = FALSE)
         return(NULL)
       }
-      write.csv(res$occurrences, file, row.names = FALSE)
+      # F-audit: attach a minimal reproducibility/provenance manifest as extra
+      # columns so a standalone CSV download (independent of the repro-script
+      # bundle) still records the query timestamp, package/DB version, and the
+      # effective filter profile/strategy actually used to produce these rows.
+      bien_ver <- tryCatch(as.character(utils::packageVersion("BIEN")), error = function(e) "unknown")
+      bien_db_ver <- tryCatch(as.character(BIEN::BIEN_metadata_database_version()), error = function(e) "unavailable")
+      export_df <- res$occurrences
+      export_df$app_download_timestamp_utc <- format(Sys.time(), tz = "UTC", usetz = TRUE)
+      export_df$app_bien_r_package_version <- bien_ver
+      export_df$app_bien_database_version <- bien_db_ver
+      export_df$app_filter_profile <- if (!is.null(res$data_profile)) as.character(res$data_profile) else NA_character_
+      export_df$app_occ_strategy <- if (!is.null(res$occ_strategy)) as.character(res$occ_strategy) else NA_character_
+      write.csv(export_df, file, row.names = FALSE)
     }
   )
 
@@ -5559,7 +5737,7 @@ server <- function(input, output, session) {
         paste0(sp_safe, "_reproduce_plot_evidence.R     : R script to rerun the plot-evidence query (self-contained)."),
         "",
         "FILTER SETTINGS",
-        paste0("Filter profile:       ", if (isTRUE(res$use_default_filter_profile)) "conservative default" else "custom"),
+        paste0("Filter profile:       ", filter_profile_label(res$data_profile)),
         paste0("Native records only:  ", if (!is.null(res$natives_only)) res$natives_only else "unknown"),
         paste0("Geo-validated only:   ", if (!is.null(res$only_geovalid)) res$only_geovalid else "unknown"),
         paste0("Occurrence strategy:  ", if (!is.null(res$occ_strategy)) res$occ_strategy else "unknown"),
@@ -6002,7 +6180,7 @@ server <- function(input, output, session) {
       use_cultivated_filter <- isTRUE(res$use_cultivated_filter)
       use_introduced_filter <- isTRUE(res$use_introduced_filter)
       count_include_cultivated <- if (use_cultivated_filter) isTRUE(res$include_cultivated) else TRUE
-      count_natives_only <- if (res$occ_strategy %in% c("fallback_relaxed_native", "fallback_relaxed_geo", "fallback_coord_bearing", "fallback_allow_centroids")) {
+      count_natives_only <- if (res$occ_strategy %in% c("zero_result_native_widened", "fallback_relaxed_native", "fallback_relaxed_geo", "fallback_coord_bearing", "fallback_allow_centroids")) {
         FALSE
       } else if (use_introduced_filter) {
         isTRUE(res$natives_only)
@@ -6014,6 +6192,11 @@ server <- function(input, output, session) {
       } else {
         isTRUE(res$only_geovalid)
       }
+      # F-audit: the effective query's centroid handling must match res$occ_strategy —
+      # the fallback_allow_centroids tier explicitly includes county-centroid rows, so
+      # the "effective filters" total/source-mix counts must include them too, or the
+      # reported total will silently undercount relative to what was actually fetched.
+      count_allow_centroids <- identical(res$occ_strategy, "fallback_allow_centroids")
 
       incProgress(0.4, detail = "Counting total BIEN matches")
       occ_total_info <- if (!is.null(cached) && !is.null(cached$total) && !is.na(cached$total)) {
@@ -6027,7 +6210,8 @@ server <- function(input, output, session) {
           timeout_sec = res$timeout_sec,
           # F2 (Issue 14 follow-up): only when natives_only is TRUE in this count.
           strict_no_unknown = isTRUE(res$strict_native_no_unknown) && isTRUE(count_natives_only),
-          strict_wild_no_unknown = isTRUE(res$strict_wild_no_unknown) && !isTRUE(count_include_cultivated)
+          strict_wild_no_unknown = isTRUE(res$strict_wild_no_unknown) && !isTRUE(count_include_cultivated),
+          allow_centroids = count_allow_centroids
         )
       }
 
@@ -6039,7 +6223,9 @@ server <- function(input, output, session) {
           cultivated = TRUE,
           natives_only = FALSE,
           only_geovalid = FALSE,
-          timeout_sec = min(res$timeout_sec, 30)
+          timeout_sec = min(res$timeout_sec, 30),
+          # The unfiltered BIEN total should include centroid-only records too.
+          allow_centroids = TRUE
         )
       }
 
@@ -6052,7 +6238,8 @@ server <- function(input, output, session) {
         timeout_sec = res$timeout_sec,
         # F2 (Issue 14 follow-up): only when natives_only is TRUE in this count.
         strict_no_unknown = isTRUE(res$strict_native_no_unknown) && isTRUE(count_natives_only),
-        strict_wild_no_unknown = isTRUE(res$strict_wild_no_unknown) && !isTRUE(count_include_cultivated)
+        strict_wild_no_unknown = isTRUE(res$strict_wild_no_unknown) && !isTRUE(count_include_cultivated),
+        allow_centroids = count_allow_centroids
       )
 
       out <- list(
@@ -6163,6 +6350,62 @@ server <- function(input, output, session) {
     )
   })
 
+  # ── Blank-map overlay: centered card over the map when result is empty ────
+  output$blank_map_overlay_ui <- renderUI({
+    res <- bien_results()
+    if (is.null(res)) return(NULL)
+    strategy <- if (!is.null(res$occ_strategy) && nzchar(res$occ_strategy)) res$occ_strategy else "strict"
+    result_state <- if (!is.null(res$result_state)) res$result_state else classify_occurrence_result(
+      strategy,
+      if (!is.null(res$data_profile)) res$data_profile else "standard",
+      if (is.data.frame(res$occurrences)) nrow(res$occurrences) else 0L,
+      if (is.data.frame(res$occurrences_prepared$data)) nrow(res$occurrences_prepared$data) else 0L
+    )
+    if (!result_state %in% c("filtered_empty", "no_records")) return(NULL)
+
+    is_filtered <- identical(result_state, "filtered_empty")
+    tags$div(
+      class = "blank-map-overlay-wrap",
+      "aria-live" = "polite",
+      tags$div(
+        class = "blank-map-card",
+        tags$div(class = "blank-map-card-icon", if (is_filtered) "\U0001F50D" else "\u26a0\ufe0f"),
+        tags$div(class = "blank-map-card-title",
+          if (is_filtered) "No records passed the current filter criteria"
+          else "No records found — check the species name"
+        ),
+        tags$div(class = "blank-map-card-body",
+          if (is_filtered) tagList(
+            "This is not evidence of absence. The NSR establishment-status filter may have excluded records that exist in BIEN. ",
+            "To test with automatic filter relaxation, switch to ",
+            tags$strong("Probable native-range records"), " and re-query."
+          ) else tagList(
+            "All five fallback tiers returned zero records. The species name may not have resolved in BIEN/TNRS. ",
+            "Try the accepted name from TROPICOS or GBIF (binomial only, sentence case).",
+            tags$br(),
+            "See the amber banner above for detailed diagnostics."
+          )
+        ),
+        if (is_filtered)
+          actionButton("try_standard_profile_btn", "Switch to Standard and re-query",
+            class = "btn btn-warning btn-sm",
+            "aria-label" = "Switch to Probable native-range records (Standard) profile and re-run the query"
+          ),
+        tags$div(class = "blank-map-card-hint",
+          if (is_filtered) "⚠ Relaxed results may include introduced populations"
+          else "Check the amber banner above for name-resolution guidance"
+        )
+      )
+    )
+  })
+
+  # ── Handle try_standard_profile_btn: switch to Standard and re-query ────
+  observeEvent(input$try_standard_profile_btn, {
+    updateRadioButtons(session, "data_profile", selected = "standard")
+    session$sendCustomMessage("bien_trigger_requery", list())
+    session$sendCustomMessage("bien_clear_stale", list())
+  }, ignoreInit = TRUE)
+
   # ── Taxon match banner: shown across all tabs when BIEN resolves a different name ────
   output$taxon_match_banner_ui <- renderUI({
     res <- bien_results()
@@ -6253,14 +6496,44 @@ server <- function(input, output, session) {
       return(make_banner(
         "fb-banner-amber", "\u26a0\ufe0f",
         "Records found, but none can be mapped",
-        paste0("BIEN returned ", nrow(res$occurrences), " records, but none contain usable coordinates under the effective filters. Tables and downloads remain available.")
+        tagList(
+          "BIEN returned ", nrow(res$occurrences), " records, but none contain usable coordinates under the effective filters. ",
+          "Tables and downloads remain available.",
+          tags$br(),
+          tags$span(style = "font-size:0.9em;",
+            "\u2192 If a BIEN range polygon exists for this species, the ",
+            tags$strong("Range"), " tab will display it as spatial context. ",
+            "\u2192 Check the ", tags$strong("Observations"), " table to inspect raw ",
+            tags$code("latitude"), "/", tags$code("longitude"), " and ",
+            tags$code("is_geovalid"), " fields \u2014 records with is_geovalid\u2009=\u20090 may have coordinates excluded by the geovalid filter."
+          )
+        )
       ))
     }
     if (identical(result_state, "filtered_empty")) {
       return(make_banner(
         "fb-banner-amber", "\u2139\ufe0f",
         "Records may exist, but none passed this profile",
-        "No records met the requested Strict or Custom criteria, and no filters were widened. Try Standard or edit Custom filters; this result is not evidence of biological absence."
+        tagList(
+          tags$strong("This is not evidence of biological absence."),
+          " No records met the active Strict or Custom screening criteria. Common causes: ",
+          tags$ul(style = "margin:6px 0 6px 0;padding-left:18px;line-height:1.6;",
+            tags$li("BIEN\u2019s NSR has evaluated this species\u2019 records and classified them as introduced (is_introduced\u2009=\u20091) \u2014 records exist but are excluded by the establishment-status filter."),
+            tags$li("NSR coverage is uneven; unevaluated records carry is_introduced IS NULL and do not pass Strict."),
+            tags$li("Records exist but lack geovalid coordinates.")
+          ),
+          tags$strong("To check whether BIEN has any records at all: "),
+          "click \u201cLoad BIEN database totals\u201d above the map. ",
+          tags$br(),
+          tags$strong("To explore records without the NSR filter: "),
+          "open ", tags$strong("Filter Records"), " in the sidebar, switch to ",
+          tags$strong("Probable native-range records"), " (Standard), and click ",
+          tags$strong("Query BIEN"), ".",
+          tags$br(),
+          tags$em(style = "font-size:0.88em;color:#92400e;",
+            "\u26a0 Relaxed results will include populations NSR has confirmed as introduced. Do not use for native-range SDM/ENM without post-hoc NSR filtering."
+          )
+        )
       ))
     }
 
@@ -6280,10 +6553,32 @@ server <- function(input, output, session) {
     if (strategy %in% c("none", "no_bien_records")) {
       return(make_banner(
         "fb-banner-amber", "\u26a0\ufe0f",
-        "Query returned no records under the current filters",
+        "No records found after all fallback tiers \u2014 check the species name first",
         tagList(
-          "This can mean (a) BIEN has no records passing these criteria, (b) the species name did not resolve in BIEN\u2019s TNRS, or (c) authorship is needed to disambiguate a homonym. ",
-          "Switch to Standard profile to test the auto-relaxation ladder."
+          "The app tried five progressively relaxed queries for ",
+          tags$strong(htmltools::htmlEscape(as.character(res$species))),
+          ", including queries that accepted any establishment status and county-level centroid coordinates. None returned any records.",
+          tags$br(), tags$br(),
+          tags$strong("Most likely causes (in order of probability):"), tags$br(),
+          tags$ol(style = "margin:6px 0;padding-left:20px;line-height:1.7;",
+            tags$li(tagList(
+              tags$strong("Name not resolved by BIEN/TNRS."),
+              " BIEN normalizes names through TROPICOS. The submitted name must match BIEN\u2019s accepted binomial (sentence case, no authority string). Synonyms and orthographic variants may not resolve. \u2192 Check the ",
+              tags$strong("Observations"), " tab Reconciliation section to see what BIEN returned. \u2192 Try the accepted name from ",
+              tags$a("TROPICOS", href = "https://tropicos.org", target = "_blank"),
+              " or ",
+              tags$a("GBIF Species", href = "https://www.gbif.org/species/search", target = "_blank"),
+              " (binomial only, no authority)."
+            )),
+            tags$li(tagList(
+              tags$strong("Genuinely no BIEN records."),
+              " BIEN 4.2 has strongest coverage for vascular plants of the Americas. Coverage for non-Americas taxa, non-vascular plants, and recently described species is limited."
+            )),
+            tags$li(tagList(
+              tags$strong("Homonym requiring disambiguation."),
+              " If the name is a homonym, BIEN may silently return the wrong concept or no records."
+            ))
+          )
         )
       ))
     }
@@ -6737,6 +7032,8 @@ server <- function(input, output, session) {
   })
 
   output$query_summary <- renderUI({
+    # Invalidate when species changes (nonce incremented in observeEvent(input$species))
+    summary_cache_nonce()
     res <- bien_results()
     summary_event <- summary_results()
     summary_cache_key <- paste0(res$query_cache_key, "||summary")
@@ -6747,9 +7044,9 @@ server <- function(input, output, session) {
     if (is.null(summary_bundle)) {
       summary_bundle <- list(
         total = NA_real_,
-        note = "Not loaded — click 'Load BIEN total counts and source mix (slower)' below to fetch the BIEN total count for this species.",
+        note = "Not loaded \u2014 click \u2018Load BIEN database totals\u2019 above the map to fetch the BIEN total count for this species.",
         total_all = NA_real_,
-        total_all_note = "Not loaded — click 'Load BIEN total counts and source mix (slower)' below to fetch.",
+        total_all_note = "Not loaded \u2014 click \u2018Load BIEN database totals\u2019 above the map to fetch.",
         source_mix = NULL,
         loaded = FALSE
       )
@@ -6880,11 +7177,7 @@ server <- function(input, output, session) {
     }
     connection_issue <- is_bien_connection_error(res$query_errors)
     strategy <- if (!is.null(res$occ_strategy) && nzchar(res$occ_strategy)) as.character(res$occ_strategy) else "strict"
-    requested_profile_txt <- if (isTRUE(res$use_default_filter_profile)) {
-      "Conservative default profile"
-    } else {
-      "Custom profile"
-    }
+    requested_profile_txt <- filter_profile_label(res$data_profile)
     effective_query_txt <- switch(
       strategy,
       strict = "Strict query (requested filters kept)",
@@ -7091,7 +7384,7 @@ server <- function(input, output, session) {
       # Metric cards
       tags$div(class = "metric-row",
         make_metric_card(format(occ_n, big.mark = ","),    "Records in app",   "matching current filters"),
-        make_metric_card(total_all_fmt,                    "Total BIEN",        "unfiltered (load above)"),
+        make_metric_card(total_all_fmt,                    "Total BIEN records (unfiltered)", "all records, no filters applied"),
         make_metric_card(format(mappable_n, big.mark = ","), "Points on map",  "after app map preparation"),
         make_metric_card(qa_removed_fmt,                   "Excluded/collapsed for map", "invalid coordinates + coordinate-equivalent rows")
       ),
@@ -7176,8 +7469,8 @@ server <- function(input, output, session) {
             } else {
               "all cultivation statuses included"
             }),
-          tags$div(tags$strong("Use BIEN default conservative filter profile: "),
-            ifelse(isTRUE(res$use_default_filter_profile), "yes", "no")),
+          tags$div(tags$strong("Filter profile: "),
+            filter_profile_label(res$data_profile)),
           tags$div(tags$strong("Show only plot/survey records: "),
             ifelse(isTRUE(res$only_plot_observations), "yes", "no")),
           tags$div(tags$strong("Exclude HumanObservation + iNaturalist: "),

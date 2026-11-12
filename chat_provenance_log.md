@@ -2,6 +2,39 @@
 
 Tracks prompts that created or changed work under this project folder.
 
+## 2026-08-05 — UX refinements: plain-English labels, filter reset, teal button, bigger stale pulse
+
+**Prompt:** "Make the flashing around the 'Query BIEN' after you change a Record filter present more obvious. Bigger flashing? Second, the text around the Record Filter present options is awkward. We need simpler phrasing in plain-english... Also, we should rethink the phrasing for 'Record Filter preset'. Noone will know what that is. Lastly, if the user changes the search and filter presets and then searches for another species, the filters should go back to the default settings. The options to load bien database totals should also go back to default settings. Can this button be a different color too."
+
+**Agents consulted:** @merow-ecology (plain-English label recommendations), @ecology-user, BIODIVERSITY_INFORMATICS_AUDIT.md.
+
+**Changes deployed to bundle `12371996`:**
+- **Stale-pulse upgrade**: outline 2px→4px, offset 2px→3px, 3→4 animation cycles, deeper amber `#d97706`, added persistent `box-shadow` layer for stronger visual signal.
+- **"Load BIEN database totals" button**: restyled teal (`#0891b2` background, white text) so it is visually distinct and easy to spot.
+- **Filter heading**: "Record filter preset" → "Which records to include?" (plain English, no jargon).
+- **Radio labels**: Standard → "Standard — likely native occurrences (default)", Strict → "Strict — confirmed wild & native only", Custom → "Custom — set your own filters".
+- **Sub-description panels**: All three rewritten to plain English, removing NSR/cultivation jargon; Standard emphasizes auto-widening, Strict emphasizes 500-record cap and no widening, Custom calls out invasion-biology use case.
+- **Filter reset on species change**: `observeEvent(input$species)` now resets all filter controls to Standard defaults and clears the stale-pulse class whenever the user selects a new species.
+- **Summary counts reset on species change**: `summary_cache_nonce` is incremented when species changes, causing `query_summary` to re-render with "Not loaded" state until the user explicitly fetches new totals.
+
+**Validation:** All 22 regression tests passed. Commit `aa9f27e`.
+
+## 2026-08-05 — UX overhaul: filter panel, blank-map overlay, counts button, stale-pulse
+
+**Prompt:** "@M please organize the following: First, I would like to have the 'Load full BIEN counts' button move from the bottom of the front page to near the top... Second, from loading a new species, sometimes the occurrence map returns a blank... Third, can the Data Profile and Filters option be modified?"
+
+**Agents invoked:** @M (supervisor), design-atelier, biodiversity-informatics-checker, EcoInterface (review synthesis done by @M after agent context cleared), coder.
+
+**Changes deployed to bundle `12371930`:**
+- **Button discoverability**: Moved `load_summary_counts` button from below the 620px map to above it in the pre-map status strip; renamed to "Load BIEN database totals"; added static annotation explaining the two counts (profile-filtered + unfiltered); fixed metric card label to "Total BIEN records (unfiltered)".
+- **Blank-map overlay**: Wrapped leafletOutput in `position:relative` container; added `blank_map_overlay_ui` overlay card that appears centered over the map for `filtered_empty` and `no_records` states; card offers one-click "Switch to Standard and re-query" recovery for filtered-empty; for no-records, directs user to check species name with TROPICOS/GBIF links.
+- **Circular-guidance bug fixed**: `no_bien_records` banner previously told users to "Switch to Standard profile" when Standard had already exhausted all 5 fallback tiers; replaced with name-resolution checklist.
+- **Filter panel redesign**: Renamed accordion "Data Profile & Filters" → "Filter Records"; added `open` attribute so it starts expanded; ecological profile labels: Standard → "Probable native-range records", Strict → "NSR-confirmed wild-native only", Custom → "Custom filter combination".
+- **Stale-query pulse**: Query BIEN button gets amber pulsing outline whenever a filter changes; disappears on click; removed static hint text.
+- **6 new regression guards** added to `tests/run_app_regression_tests.R`.
+
+**Validation:** All 22 regression tests passed.
+
 ## 2026-08-04 — GitHub release and shinyapps.io deployment
 
 **Prompt:** "please commit and deploy"

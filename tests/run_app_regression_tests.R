@@ -202,7 +202,11 @@ test_helper_functions <- function() {
     "BIEN: Botanical Information and Ecology Network",
     "post-QA",
     "Removed by QA",
-    "Observation records after QA"
+    "Observation records after QA",
+    # Circular recovery guidance: must not tell user to switch to Standard when Standard has already exhausted all tiers
+    "Switch to Standard profile to test the auto-relaxation ladder",
+    # Load button must not appear below the map with old label
+    "Load full BIEN counts (slower)"
   )
   for (claim in prohibited_claims) {
     assert_true(!grepl(claim, app_source, fixed = TRUE), paste("Unsupported or inaccurate claim remains:", claim))
@@ -214,6 +218,17 @@ test_helper_functions <- function() {
   trait_script_handlers <- gregexpr("output$download_trait_repro_script <- downloadHandler", app_source, fixed = TRUE)[[1]]
   assert_true(trait_script_handlers[[1]] > 0 && length(trait_script_handlers) == 1, "Trait reproduction download handler must be defined exactly once")
   assert_true(grepl("_plot_evidence_dataset.csv", app_source, fixed = TRUE), "Plot-evidence CSV filename is missing")
+  # Load BIEN counts button must be above the map (in bien-status-stack, before leafletOutput)
+  load_btn_pos <- regexpr("load_summary_counts", app_source, fixed = TRUE)[[1]]
+  map_pos      <- regexpr('leafletOutput("occurrence_map"', app_source, fixed = TRUE)[[1]]
+  assert_true(load_btn_pos > 0 && map_pos > 0 && load_btn_pos < map_pos, "Load BIEN counts button must appear before the occurrence map in the UI")
+  # Filter accordion must start open and be labelled 'Filter Records'
+  assert_true(grepl('id="filter-accordion" open', app_source, fixed = TRUE), "Filter accordion must have id and open attribute")
+  assert_true(grepl("Filter Records", app_source, fixed = TRUE), "Filter accordion must be labelled 'Filter Records'")
+  # blank-map overlay must be present
+  assert_true(grepl('blank_map_overlay_ui', app_source, fixed = TRUE), "Blank-map overlay UI output must be defined")
+  # Stale-pulse JS must be present
+  assert_true(grepl("bien-query-stale", app_source, fixed = TRUE), "Stale-query pulse CSS class must be present")
   pass("Backend NULL handling and reproduction-script filter contracts are guarded")
 
   assert_true(is_bien_connection_error(c("Error connecting to the BIEN database")), "is_bien_connection_error failed")
